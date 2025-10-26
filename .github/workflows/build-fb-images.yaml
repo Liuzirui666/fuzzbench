@@ -25,8 +25,8 @@ jobs:
       contents: read
       packages: write
     env:
-      # EXACT list you requested (9 fuzzers) — corrected to 'entropic' (not eclipser)
-      DEFAULT_FUZZERS: "afl aflfast aflplusplus aflsmart entropic fairfuzz honggfuzz libfuzzer mopt"
+      # 9 fuzzers
+      DEFAULT_FUZZERS: "afl aflfast aflplusplus aflsmart eclipser fairfuzz honggfuzz libfuzzer mopt"
       # Enable BuildKit on runners (usually default, but we make it explicit)
       DOCKER_BUILDKIT: "1"
 
