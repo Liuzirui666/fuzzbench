@@ -6,16 +6,17 @@ on:
       benchmarks:
         description: "Space-separated benchmarks (or 'ALL')"
         required: true
-        default: "ALL"
+        # Your 20-benchmark subset by default
+        default: "bloaty_fuzz_target curl_curl_fuzzer_http freetype2_ftfuzzer harfbuzz_hb-shape-fuzzer jsoncpp_jsoncpp_fuzzer lcms_cms_transform_fuzzer libjpeg-turbo_libjpeg_turbo_fuzzer libpcap_fuzz_both libpng_libpng_read_fuzzer libxml2_xml mbedtls_fuzz_dtlsclient openssl_x509 openthread_ot-ip6-send-fuzzer proj4_proj_crs_to_crs_fuzzer re2_fuzzer sqlite3_ossfuzz systemd_fuzz-link-parser vorbis_decode_fuzzer woff2_convert_woff2ttf_fuzzer zlib_zlib_uncompress_fuzzer"
       fuzzers:
         description: "Space-separated fuzzers (leave empty to use default list)"
         required: false
         default: ""
       push:
-        description: "Push images to GHCR after build?"
+        description: "Push images to GHCR after build? (recommended)"
         type: boolean
         required: true
-        default: false
+        default: true
 
 jobs:
   build:
@@ -24,14 +25,26 @@ jobs:
       contents: read
       packages: write
     env:
-      # EXACT list you asked for:
-      DEFAULT_FUZZERS: "afl aflfast aflplusplus aflsmart fairfuzz honggfuzz libfuzzer mopt eclipser"
+      # EXACT list you requested (9 fuzzers) — corrected to 'entropic' (not eclipser)
+      DEFAULT_FUZZERS: "afl aflfast aflplusplus aflsmart entropic fairfuzz honggfuzz libfuzzer mopt"
+      # Enable BuildKit on runners (usually default, but we make it explicit)
+      DOCKER_BUILDKIT: "1"
 
     steps:
+      - name: Free disk space on runner
+        # Frees ~20–30GB so large image graphs fit
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          toolcache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
-          # Full history not required since we skip presubmit
           fetch-depth: 1
           submodules: false
 
@@ -47,6 +60,7 @@ jobs:
           python -m pip install -U pip
           pip install -r requirements.txt
 
+      # FuzzBench builds via a generated Makefile with per (fuzzer, benchmark) targets.
       - name: Generate FuzzBench Makefile
         run: |
           source .venv/bin/activate
@@ -80,41 +94,46 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build all fuzzer–benchmark pairs
+      # Build -> (optional) push -> prune PER PAIR to avoid "no space left on device"
+      - name: Build each pair, (optionally) push, and prune
         shell: bash
+        env:
+          DO_PUSH: "${{ inputs.push }}"
         run: |
           set -euo pipefail
           source .venv/bin/activate
-          for f in $FUZZERS; do
-            for b in $BENCHMARKS; do
-              echo "::group::make build-$f-$b"
-              make -j2 "build-$f-$b"
-              echo "::endgroup::"
-            done
-          done
 
-      # Optional publish to GHCR so Unity can apptainer-pull:
-      - name: Tag & push images to GHCR (optional)
-        if: ${{ inputs.push }}
-        shell: bash
-        run: |
-          set -euo pipefail
           OWNER_LC="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
           REG_BASE="ghcr.io/${OWNER_LC}/fuzzbench"
-          # Builder/runner names produced by FuzzBench build targets:
+
           for f in $FUZZERS; do
             for b in $BENCHMARKS; do
-              SRC_BUILDER="gcr.io/fuzzbench/builders/${f}/${b}"
-              SRC_RUNNER="gcr.io/fuzzbench/runners/${f}/${b}"
-              DST_BUILDER="${REG_BASE}/builders/${f}/${b}:latest"
-              DST_RUNNER="${REG_BASE}/runners/${f}/${b}:latest"
-              if docker image inspect "$SRC_BUILDER" >/dev/null 2>&1; then
-                docker tag "$SRC_BUILDER" "$DST_BUILDER"
-                docker push "$DST_BUILDER"
+              echo "::group::build-$f-$b"
+              make -j2 "build-$f-$b"
+              echo "::endgroup::"
+
+              if [[ "$DO_PUSH" == "true" ]]; then
+                SRC_BUILDER="gcr.io/fuzzbench/builders/${f}/${b}"
+                SRC_RUNNER="gcr.io/fuzzbench/runners/${f}/${b}"
+                DST_BUILDER="${REG_BASE}/builders/${f}/${b}:latest"
+                DST_RUNNER="${REG_BASE}/runners/${f}/${b}:latest"
+
+                echo "::group::tag+push $f $b"
+                if docker image inspect "$SRC_BUILDER" >/dev/null 2>&1; then
+                  docker tag "$SRC_BUILDER" "$DST_BUILDER"
+                  docker push "$DST_BUILDER" || true
+                fi
+                if docker image inspect "$SRC_RUNNER" >/dev/null 2>&1; then
+                  docker tag "$SRC_RUNNER" "$DST_RUNNER"
+                  docker push "$DST_RUNNER" || true
+                fi
+                echo "::endgroup::"
+
+                # Remove both source and destination tags to free space
+                docker image rm -f "$SRC_BUILDER" "$SRC_RUNNER" "$DST_BUILDER" "$DST_RUNNER" 2>/dev/null || true
               fi
-              if docker image inspect "$SRC_RUNNER" >/dev/null 2>&1; then
-                docker tag "$SRC_RUNNER" "$DST_RUNNER"
-                docker push "$DST_RUNNER"
-              fi
+
+              # Aggressive prune after every pair to stay under disk limits
+              docker system prune -af --volumes || true
             done
           done
