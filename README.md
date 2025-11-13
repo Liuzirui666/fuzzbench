@@ -1,6 +1,6 @@
 # Proof
 
-Proof is attached in [Proof for fuzzing](https://github.com/Liuzirui666/fuzzbench/blob/master/Proof_S_P_26_Fuzzing.pdf)
+Proof is attached in [Proof for fuzzing](https://github.com/Liuzirui666/fuzzbench/blob/master/Proof_S_P_26_Fuzzing.pdf) due to limited space.
 
 # FuzzBench: Fuzzer Benchmarking As a Service
 
