@@ -1,7 +1,3 @@
-# Proof
-
-Proof is attached in [Proof for fuzzing](https://github.com/Liuzirui666/fuzzbench/blob/master/Proof_S_P_26_Fuzzing.pdf) due to limited space.
-
 # FuzzBench: Fuzzer Benchmarking As a Service
 
 FuzzBench is a free service that evaluates fuzzers on a wide variety of
