@@ -1,4 +1,4 @@
-# Copyright 2018 Google Inc.
+# Copyright 2016 Google Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,12 +15,20 @@
 ################################################################################
 
 FROM gcr.io/oss-fuzz-base/base-builder
+ARG TARGETPLATFORM
+
 RUN apt-get update && \
-    apt-get install -y ffmpeg libstdc++-9-dev libstdc++-9-dev:i386 nasm subversion
-RUN git clone --depth 1 https://github.com/cisco/openh264.git openh264
-RUN python3 -m pip install --upgrade pip && python3 -m pip install corpus-replicator
-RUN corpus-replicator -o corpus video_h264_264_libx264.yml video
-RUN mv openh264/res/*.264 corpus/
-RUN zip -j0r decoder_fuzzer_seed_corpus.zip corpus/
-WORKDIR openh264
-COPY build.sh decoder_fuzzer.cpp $SRC/
+    case "$TARGETPLATFORM" in \
+        'linux/arm64') EXTRA_PACKAGES='' ;; \
+        *)             EXTRA_PACKAGES='zlib1g-dev:i386 liblzma-dev:i386' ;; \
+    esac && \
+    apt-get install -y --no-install-recommends \
+        make autoconf libtool pkg-config \
+        zlib1g-dev liblzma-dev \
+        $EXTRA_PACKAGES
+# Build requires automake 1.16.3
+RUN curl -LO http://mirrors.kernel.org/ubuntu/pool/main/a/automake-1.16/automake_1.16.5-1.3_all.deb && \
+    apt install ./automake_1.16.5-1.3_all.deb
+RUN git clone --depth 1 https://gitlab.gnome.org/GNOME/libxml2.git
+WORKDIR libxml2
+COPY build.sh $SRC/

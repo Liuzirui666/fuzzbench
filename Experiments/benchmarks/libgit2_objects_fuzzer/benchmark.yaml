@@ -1,0 +1,2 @@
+fuzz_target: objects_fuzzer
+project: libgit2

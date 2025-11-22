@@ -1,0 +1,2 @@
+fuzz_target: aspell_fuzzer
+project: aspell

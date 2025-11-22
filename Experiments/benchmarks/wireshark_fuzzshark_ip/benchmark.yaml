@@ -1,0 +1,2 @@
+fuzz_target: fuzzshark_ip
+project: wireshark

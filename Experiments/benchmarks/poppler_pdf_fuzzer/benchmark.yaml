@@ -1,0 +1,2 @@
+fuzz_target: pdf_fuzzer
+project: poppler

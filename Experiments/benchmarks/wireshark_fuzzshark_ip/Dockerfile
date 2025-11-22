@@ -1,4 +1,4 @@
-# Copyright 2018 Google Inc.
+# Copyright 2017 Google Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,12 +15,14 @@
 ################################################################################
 
 FROM gcr.io/oss-fuzz-base/base-builder
-RUN apt-get update && \
-    apt-get install -y ffmpeg libstdc++-9-dev libstdc++-9-dev:i386 nasm subversion
-RUN git clone --depth 1 https://github.com/cisco/openh264.git openh264
-RUN python3 -m pip install --upgrade pip && python3 -m pip install corpus-replicator
-RUN corpus-replicator -o corpus video_h264_264_libx264.yml video
-RUN mv openh264/res/*.264 corpus/
-RUN zip -j0r decoder_fuzzer_seed_corpus.zip corpus/
-WORKDIR openh264
-COPY build.sh decoder_fuzzer.cpp $SRC/
+
+RUN apt-get update && apt-get install -y ninja-build cmake \
+                       flex libc-ares-dev \
+                       libglib2.0-dev libgcrypt20-dev wget
+
+RUN wget https://dev-www.libreoffice.org/src/libxml2-2.9.7.tar.gz
+RUN git clone --depth=1 https://gitlab.com/wireshark/wireshark.git
+RUN git clone --depth=1 https://bitbucket.org/jwzawadzki/wireshark-fuzzdb.git
+
+WORKDIR wireshark
+COPY build.sh $SRC/

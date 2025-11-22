@@ -1,0 +1,2 @@
+fuzz_target: fuzz_htp
+project: libhtp

@@ -1,0 +1,2 @@
+fuzz_target: njs_process_script_fuzzer
+project: njs

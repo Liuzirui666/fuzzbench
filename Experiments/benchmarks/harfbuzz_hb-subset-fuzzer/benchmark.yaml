@@ -1,0 +1,2 @@
+fuzz_target: hb-subset-fuzzer
+project: harfbuzz

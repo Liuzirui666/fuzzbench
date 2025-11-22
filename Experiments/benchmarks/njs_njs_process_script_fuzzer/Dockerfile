@@ -1,4 +1,4 @@
-# Copyright 2018 Google Inc.
+# Copyright 2019 Google Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,12 +15,10 @@
 ################################################################################
 
 FROM gcr.io/oss-fuzz-base/base-builder
-RUN apt-get update && \
-    apt-get install -y ffmpeg libstdc++-9-dev libstdc++-9-dev:i386 nasm subversion
-RUN git clone --depth 1 https://github.com/cisco/openh264.git openh264
-RUN python3 -m pip install --upgrade pip && python3 -m pip install corpus-replicator
-RUN corpus-replicator -o corpus video_h264_264_libx264.yml video
-RUN mv openh264/res/*.264 corpus/
-RUN zip -j0r decoder_fuzzer_seed_corpus.zip corpus/
-WORKDIR openh264
-COPY build.sh decoder_fuzzer.cpp $SRC/
+RUN apt-get update && apt-get install -y make autoconf automake libtool \
+    mercurial git libpcre2-dev
+RUN hg clone http://hg.nginx.org/njs
+RUN git clone --branch pcre2-10.39 https://github.com/PhilipHazel/pcre2 pcre2
+
+WORKDIR njs
+COPY build.sh $SRC/

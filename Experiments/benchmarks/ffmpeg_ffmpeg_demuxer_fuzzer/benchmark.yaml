@@ -1,0 +1,2 @@
+fuzz_target: ffmpeg_demuxer_fuzzer
+project: ffmpeg

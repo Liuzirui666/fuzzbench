@@ -1,0 +1,2 @@
+fuzz_target: hevc_dec_fuzzer
+project: libhevc
