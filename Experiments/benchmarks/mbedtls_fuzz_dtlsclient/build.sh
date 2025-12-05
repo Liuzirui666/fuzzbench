@@ -15,13 +15,12 @@
 #
 ################################################################################
 
-pip3 install -r $SRC/mbedtls/scripts/basic.requirements.txt
-
 # build project
 perl scripts/config.pl set MBEDTLS_PLATFORM_TIME_ALT
+git -C crypto checkout -f 819799cfc68e4c4381673a8a27af19802c8263f2
 mkdir build
 cd build
-cmake -DENABLE_TESTING=OFF ..
+cmake ..
 # build including fuzzers
 make -j$(nproc) all
 cp programs/fuzz/fuzz_* $OUT/

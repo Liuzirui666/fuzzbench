@@ -22,7 +22,6 @@ from analysis import benchmark_results
 from analysis import coverage_data_utils
 from analysis import data_utils
 from analysis import stat_tests
-from common import experiment_utils
 
 
 def strip_gs_protocol(url):
@@ -114,7 +113,10 @@ class ExperimentResults:  # pylint: disable=too-many-instance-attributes
         df.index = df.index.map(lambda fuzzer: description_link(commit, fuzzer))
         return df
 
-    @functools.cached_property
+    @property
+    @functools.lru_cache()
+    # TODO(lszekeres): With python3.8+, replace above two decorators with:
+    # @functools.cached_property
     def _experiment_snapshots_df(self):
         """Data frame containing only the time snapshots, for each benchmark,
         based on which we do further analysis, i.e., statistical tests and
@@ -130,7 +132,6 @@ class ExperimentResults:  # pylint: disable=too-many-instance-attributes
         until a property is evaluated.
         """
         benchmark_names = self._experiment_df.benchmark.unique()
-
         return [
             benchmark_results.BenchmarkResults(name, self._experiment_df,
                                                self._coverage_dict,
@@ -148,8 +149,12 @@ class ExperimentResults:  # pylint: disable=too-many-instance-attributes
 
         Raises ValueError if the benchmark types are mixed.
         """
-        benchmarks = [benchmark.name for benchmark in self.benchmarks]
-        return experiment_utils.get_experiment_type(benchmarks)
+        if all(b.type == 'bug' for b in self.benchmarks):
+            return 'bug'
+        if all(b.type == 'code' for b in self.benchmarks):
+            return 'code'
+        raise ValueError(
+            'Cannot mix bug benchmarks with code coverage benchmarks.')
 
     @property
     def _relevant_column(self):
@@ -194,7 +199,7 @@ class ExperimentResults:  # pylint: disable=too-many-instance-attributes
         pivot = pivot.style\
                 .background_gradient(axis=1, cmap=whbl, vmin=95, vmax=100)\
                 .highlight_max(axis=1, color='lightgreen')\
-                .format('{:.2f}')\
+                .format("{:.2f}")\
                 .apply(data_utils.underline_row, axis=1, subset=idx)\
                 .set_table_styles(self._SUMMARY_TABLE_STYLE)
         return pivot
@@ -220,7 +225,7 @@ class ExperimentResults:  # pylint: disable=too-many-instance-attributes
         groups = groups.reset_index()
         pivot = groups.pivot(index='benchmark',
                              columns='fuzzer',
-                             values='crash_key')
+                             values="crash_key")
         # save fuzzer names
         fuzzer_names = pivot.columns
         pivot['Total'] = self._full_experiment_df.groupby(
@@ -248,7 +253,7 @@ class ExperimentResults:  # pylint: disable=too-many-instance-attributes
         # Sort fuzzers left to right by FuzzerSum
         pivot = pivot.sort_values(by='FuzzerSum', axis=1, ascending=False)
         pivot = pivot.style\
-                .format('{:.0f}')\
+                .format("{:.0f}")\
                 .apply(highlight_max, axis=1, subset=fuzzer_names)\
                 .apply(data_utils.underline_row, axis=1, subset=idx)\
                 .set_table_styles(self._SUMMARY_TABLE_STYLE)
@@ -259,7 +264,7 @@ class ExperimentResults:  # pylint: disable=too-many-instance-attributes
         """Rank fuzzers using average normalized score on unique code coverage
         across benchmarks."""
         benchmarks_unique_coverage_list = [
-            benchmark.unique_branch_cov_df for benchmark in self.benchmarks
+            benchmark.unique_region_cov_df for benchmark in self.benchmarks
         ]
         return coverage_data_utils.rank_by_average_normalized_score(
             benchmarks_unique_coverage_list)

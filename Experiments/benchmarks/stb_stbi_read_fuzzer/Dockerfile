@@ -14,25 +14,15 @@
 #
 ################################################################################
 
-FROM gcr.io/oss-fuzz-base/base-builder
+FROM gcr.io/oss-fuzz-base/base-builder@sha256:1b6a6993690fa947df74ceabbf6a1f89a46d7e4277492addcd45a8525e34be5a
 
 RUN apt-get update && \
     apt-get install -y wget tar
 
-
 RUN git clone --depth 1 https://github.com/nothings/stb.git
 
-RUN mkdir $SRC/stbi # CIFuzz workaround
+RUN wget -O $SRC/stb/gif.tar.gz https://storage.googleapis.com/google-code-archive-downloads/v2/code.google.com/imagetestsuite/imagetestsuite-gif-1.00.tar.gz
+RUN wget -O $SRC/stb/jpg.tar.gz https://storage.googleapis.com/google-code-archive-downloads/v2/code.google.com/imagetestsuite/imagetestsuite-jpg-1.00.tar.gz
+RUN wget -O $SRC/stb/tests/gif.dict https://raw.githubusercontent.com/mirrorer/afl/master/dictionaries/gif.dict &> /dev/null
 
-RUN wget -O $SRC/stbi/gif.tar.gz https://storage.googleapis.com/google-code-archive-downloads/v2/code.google.com/imagetestsuite/imagetestsuite-gif-1.00.tar.gz
-RUN wget -O $SRC/stbi/jpg.tar.gz https://storage.googleapis.com/google-code-archive-downloads/v2/code.google.com/imagetestsuite/imagetestsuite-jpg-1.00.tar.gz
-RUN wget -O $SRC/stbi/bmp.zip http://entropymine.com/jason/bmpsuite/releases/bmpsuite-2.6.zip
-RUN wget -O $SRC/stbi/tga.zip https://github.com/richgel999/tga_test_files/archive/master.zip
-
-RUN wget -O $SRC/stbi/gif.dict https://raw.githubusercontent.com/mirrorer/afl/master/dictionaries/gif.dict
-
-# Maintain compatibility with master branch until a new release
-RUN cp $SRC/stbi/gif.tar.gz $SRC/stbi/jpg.tar.gz $SRC/stbi/bmp.zip $SRC/stbi/gif.dict $SRC/stb
-
-WORKDIR stb
 COPY build.sh $SRC/

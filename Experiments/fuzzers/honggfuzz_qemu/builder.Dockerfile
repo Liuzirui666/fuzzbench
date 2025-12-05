@@ -17,7 +17,6 @@ FROM $parent_image
 
 # Honggfuzz requires libbfd and libunwid.
 RUN apt-get update -y && \
-    apt-get upgrade -y ca-certificates && \
     apt-get install -y \
     libbfd-dev \
     libunwind-dev \

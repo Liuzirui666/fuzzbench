@@ -14,21 +14,14 @@
 #
 ################################################################################
 
-FROM gcr.io/oss-fuzz-base/base-builder
-ARG TARGETPLATFORM
+FROM gcr.io/oss-fuzz-base/base-builder@sha256:1b6a6993690fa947df74ceabbf6a1f89a46d7e4277492addcd45a8525e34be5a
 
-RUN apt-get update && \
-    case "$TARGETPLATFORM" in \
-        'linux/arm64') EXTRA_PACKAGES='' ;; \
-        *)             EXTRA_PACKAGES='zlib1g-dev:i386 liblzma-dev:i386' ;; \
-    esac && \
-    apt-get install -y --no-install-recommends \
-        make autoconf libtool pkg-config \
-        zlib1g-dev liblzma-dev \
-        $EXTRA_PACKAGES
-# Build requires automake 1.16.3
-RUN curl -LO http://mirrors.kernel.org/ubuntu/pool/main/a/automake-1.16/automake_1.16.5-1.3_all.deb && \
-    apt install ./automake_1.16.5-1.3_all.deb
-RUN git clone --depth 1 https://gitlab.gnome.org/GNOME/libxml2.git
+# Upgrade to avoid certs errors
+RUN apt-get update && apt-get upgrade -y && \
+    apt-get install -y make autoconf automake libtool pkg-config python-dev python3-dev
+
+RUN git clone https://gitlab.gnome.org/GNOME/libxml2.git
 WORKDIR libxml2
+
 COPY build.sh $SRC/
+COPY *.cc *.h *.dict $SRC/

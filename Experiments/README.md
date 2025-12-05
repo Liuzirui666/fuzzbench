@@ -23,12 +23,7 @@ your fuzzer and generate a report comparing your fuzzer to others.
 See [a sample report](https://www.fuzzbench.com/reports/sample/index.html).
 
 ## Overview
-<kbd>
-  
 ![FuzzBench Service diagram](docs/images/FuzzBench-service.png)
-  
-</kbd>
-
 
 ## Sample Report
 

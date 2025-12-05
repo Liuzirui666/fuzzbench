@@ -14,9 +14,10 @@
 #
 ################################################################################
 
-FROM gcr.io/oss-fuzz-base/base-builder
+FROM gcr.io/oss-fuzz-base/base-builder@sha256:1b6a6993690fa947df74ceabbf6a1f89a46d7e4277492addcd45a8525e34be5a
 
-RUN git clone --recursive --depth 1 https://github.com/GrokImageCompression/grok.git grok
-RUN git clone --depth 1 https://github.com/GrokImageCompression/grok-test-data.git grok-data
+RUN git clone https://github.com/GrokImageCompression/grok.git grok
+RUN git clone https://github.com/GrokImageCompression/grok-test-data.git grok/data
 WORKDIR grok
 COPY build.sh $SRC/
+

@@ -16,7 +16,6 @@
 import collections
 import gc
 import glob
-import gzip
 import multiprocessing
 import json
 import os
@@ -26,14 +25,14 @@ import sys
 import tempfile
 import tarfile
 import time
-from typing import List
+from typing import List, Set
 import queue
 import psutil
 
 from sqlalchemy import func
 from sqlalchemy import orm
 
-from common import benchmark_utils
+from common import benchmark_config
 from common import experiment_utils
 from common import experiment_path as exp_path
 from common import filesystem
@@ -45,20 +44,20 @@ from database import utils as db_utils
 from database import models
 from experiment.build import build_utils
 from experiment.measurer import coverage_utils
-from experiment.measurer import measure_worker
 from experiment.measurer import run_coverage
 from experiment.measurer import run_crashes
 from experiment import scheduler
-import experiment.measurer.datatypes as measurer_datatypes
 
-logger = logs.Logger()
+logger = logs.Logger('measurer')  # pylint: disable=invalid-name
+
+SnapshotMeasureRequest = collections.namedtuple(
+    'SnapshotMeasureRequest', ['fuzzer', 'benchmark', 'trial_id', 'cycle'])
 
 NUM_RETRIES = 3
 RETRY_DELAY = 3
 FAIL_WAIT_SECONDS = 30
 SNAPSHOT_QUEUE_GET_TIMEOUT = 1
 SNAPSHOTS_BATCH_SAVE_SIZE = 100
-MEASUREMENT_LOOP_WAIT = 10
 
 
 def exists_in_experiment_filestore(path: pathlib.Path) -> bool:
@@ -76,9 +75,8 @@ def measure_main(experiment_config):
     experiment = experiment_config['experiment']
     max_total_time = experiment_config['max_total_time']
     measurers_cpus = experiment_config['measurers_cpus']
-    region_coverage = experiment_config['region_coverage']
-    measure_manager_loop(experiment, max_total_time, measurers_cpus,
-                         region_coverage)
+    runners_cpus = experiment_config['runners_cpus']
+    measure_loop(experiment, max_total_time, measurers_cpus, runners_cpus)
 
     # Clean up resources.
     gc.collect()
@@ -99,29 +97,36 @@ def _process_init(cores_queue):
 def measure_loop(experiment: str,
                  max_total_time: int,
                  measurers_cpus=None,
-                 runners_cpus=None,
-                 region_coverage=False):
+                 runners_cpus=None):
     """Continuously measure trials for |experiment|."""
     logger.info('Start measure_loop.')
 
-    pool_args = get_pool_args(measurers_cpus, runners_cpus)
+    pool_args = ()
+    if measurers_cpus is not None and runners_cpus is not None:
+        local_experiment = experiment_utils.is_local_experiment()
+        if local_experiment:
+            cores_queue = multiprocessing.Queue()
+            logger.info('Scheduling measurers from core %d to %d.' %
+                        (runners_cpus, runners_cpus + measurers_cpus - 1))
+            for cpu in range(runners_cpus, runners_cpus + measurers_cpus):
+                cores_queue.put(cpu)
+            pool_args = (measurers_cpus, _process_init, (cores_queue,))
+        else:
+            pool_args = (measurers_cpus,)
 
     with multiprocessing.Pool(
             *pool_args) as pool, multiprocessing.Manager() as manager:
         set_up_coverage_binaries(pool, experiment)
         # Using Multiprocessing.Queue will fail with a complaint about
         # inheriting queue.
-        # pytype: disable=attribute-error
-        multiprocessing_queue = manager.Queue()
+        q = manager.Queue()  # pytype: disable=attribute-error
         while True:
             try:
                 # Get whether all trials have ended before we measure to prevent
                 # races.
                 all_trials_ended = scheduler.all_trials_ended(experiment)
 
-                if not measure_all_trials(experiment, max_total_time, pool,
-                                          multiprocessing_queue,
-                                          region_coverage):
+                if not measure_all_trials(experiment, max_total_time, pool, q):
                     # We didn't measure any trials.
                     if all_trials_ended:
                         # There are no trials producing snapshots to measure.
@@ -136,8 +141,7 @@ def measure_loop(experiment: str,
     logger.info('Finished measure loop.')
 
 
-def measure_all_trials(experiment: str, max_total_time: int, pool,
-                       multiprocessing_queue, region_coverage) -> bool:
+def measure_all_trials(experiment: str, max_total_time: int, pool, q) -> bool:  # pylint: disable=invalid-name
     """Get coverage data (with coverage runs) for all active trials. Note that
     this should not be called unless multiprocessing.set_start_method('spawn')
     was called first. Otherwise it will use fork which breaks logging."""
@@ -154,7 +158,7 @@ def measure_all_trials(experiment: str, max_total_time: int, pool,
         return False
 
     measure_trial_coverage_args = [
-        (unmeasured_snapshot, max_cycle, multiprocessing_queue, region_coverage)
+        (unmeasured_snapshot, max_cycle, q)
         for unmeasured_snapshot in unmeasured_snapshots
     ]
 
@@ -180,8 +184,7 @@ def measure_all_trials(experiment: str, max_total_time: int, pool,
 
     while True:
         try:
-            snapshot = multiprocessing_queue.get(
-                timeout=SNAPSHOT_QUEUE_GET_TIMEOUT)
+            snapshot = q.get(timeout=SNAPSHOT_QUEUE_GET_TIMEOUT)
             snapshots.append(snapshot)
         except queue.Empty:
             if result.ready():
@@ -245,13 +248,12 @@ def _query_unmeasured_trials(experiment: str):
 
 
 def _get_unmeasured_first_snapshots(
-        experiment: str) -> List[measurer_datatypes.SnapshotMeasureRequest]:
+        experiment: str) -> List[SnapshotMeasureRequest]:
     """Returns a list of unmeasured SnapshotMeasureRequests that are the first
     snapshot for their trial. The trials are trials in |experiment|."""
     trials_without_snapshots = _query_unmeasured_trials(experiment)
     return [
-        measurer_datatypes.SnapshotMeasureRequest(trial.fuzzer, trial.benchmark,
-                                                  trial.id, 0)
+        SnapshotMeasureRequest(trial.fuzzer, trial.benchmark, trial.id, 1)
         for trial in trials_without_snapshots
     ]
 
@@ -279,8 +281,7 @@ def _query_measured_latest_snapshots(experiment: str):
 
 
 def _get_unmeasured_next_snapshots(
-        experiment: str,
-        max_cycle: int) -> List[measurer_datatypes.SnapshotMeasureRequest]:
+        experiment: str, max_cycle: int) -> List[SnapshotMeasureRequest]:
     """Returns a list of the latest unmeasured SnapshotMeasureRequests of
     trials in |experiment| that have been measured at least once in
     |experiment|. |max_total_time| is used to determine if a trial has another
@@ -296,15 +297,16 @@ def _get_unmeasured_next_snapshots(
         if next_cycle > max_cycle:
             continue
 
-        snapshot_with_cycle = measurer_datatypes.SnapshotMeasureRequest(
-            snapshot.fuzzer, snapshot.benchmark, snapshot.trial_id, next_cycle)
+        snapshot_with_cycle = SnapshotMeasureRequest(snapshot.fuzzer,
+                                                     snapshot.benchmark,
+                                                     snapshot.trial_id,
+                                                     next_cycle)
         next_snapshots.append(snapshot_with_cycle)
     return next_snapshots
 
 
-def get_unmeasured_snapshots(
-        experiment: str,
-        max_cycle: int) -> List[measurer_datatypes.SnapshotMeasureRequest]:
+def get_unmeasured_snapshots(experiment: str,
+                             max_cycle: int) -> List[SnapshotMeasureRequest]:
     """Returns a list of SnapshotMeasureRequests that need to be measured
     (assuming they have been saved already)."""
     # Measure the first snapshot of every started trial without any measured
@@ -318,42 +320,44 @@ def get_unmeasured_snapshots(
     return unmeasured_first_snapshots + unmeasured_latest_snapshots
 
 
-def extract_corpus(corpus_archive: str, output_directory: str):
+def extract_corpus(corpus_archive: str, sha_blacklist: Set[str],
+                   output_directory: str):
     """Extract a corpus from |corpus_archive| to |output_directory|."""
     pathlib.Path(output_directory).mkdir(exist_ok=True)
-    with tarfile.open(corpus_archive, 'r:gz') as tar:
-        for member in tar.getmembers():
+    tar = tarfile.open(corpus_archive, 'r:gz')
+    for member in tar.getmembers():
 
-            if not member.isfile():
-                # We don't care about directory structure.
-                # So skip if not a file.
-                continue
+        if not member.isfile():
+            # We don't care about directory structure. So skip if not a file.
+            continue
 
-            member_file_handle = tar.extractfile(member)
-            if not member_file_handle:
-                logger.info('Failed to get handle to %s.', member)
-                continue
+        member_file_handle = tar.extractfile(member)
+        if not member_file_handle:
+            logger.info('Failed to get handle to %s', member)
+            continue
 
-            # TODO(metzman): Consider removing the hashing. We don't really need
-            # it anymore.
-            member_contents = member_file_handle.read()
-            filename = utils.string_hash(member_contents)
-            file_path = os.path.join(output_directory, filename)
+        member_contents = member_file_handle.read()
+        filename = utils.string_hash(member_contents)
+        if filename in sha_blacklist:
+            continue
 
-            if os.path.exists(file_path):
-                # Don't write out duplicates in the archive.
-                continue
+        file_path = os.path.join(output_directory, filename)
 
-            filesystem.write(file_path, member_contents, 'wb')
+        if os.path.exists(file_path):
+            # Don't write out duplicates in the archive.
+            continue
+
+        filesystem.write(file_path, member_contents, 'wb')
 
 
 class SnapshotMeasurer(coverage_utils.TrialCoverage):  # pylint: disable=too-many-instance-attributes
     """Class used for storing details needed to measure coverage of a particular
     trial."""
 
-    # pylint: disable=too-many-arguments
+    UNIT_BLACKLIST = collections.defaultdict(set)
+
     def __init__(self, fuzzer: str, benchmark: str, trial_num: int,
-                 trial_logger: logs.Logger, region_coverage: bool):
+                 trial_logger: logs.Logger):
         super().__init__(fuzzer, benchmark, trial_num)
         self.logger = trial_logger
         self.corpus_dir = os.path.join(self.measurement_dir, 'corpus')
@@ -362,6 +366,15 @@ class SnapshotMeasurer(coverage_utils.TrialCoverage):  # pylint: disable=too-man
         self.coverage_dir = os.path.join(self.measurement_dir, 'coverage')
         self.trial_dir = os.path.join(self.work_dir, 'experiment-folders',
                                       self.benchmark_fuzzer_trial_dir)
+
+        # Stores the files that have already been measured for a trial.
+        self.measured_files_path = os.path.join(self.report_dir,
+                                                'measured-files.txt')
+
+        # Used by the runner to signal that there won't be a corpus archive for
+        # a cycle because the corpus hasn't changed since the last cycle.
+        self.unchanged_cycles_path = os.path.join(self.trial_dir, 'results',
+                                                  'unchanged-cycles')
 
         # Store the profraw file containing coverage data for each cycle.
         self.profraw_file_pattern = os.path.join(self.coverage_dir,
@@ -373,9 +386,6 @@ class SnapshotMeasurer(coverage_utils.TrialCoverage):  # pylint: disable=too-man
         # Store the coverage information in json form.
         self.cov_summary_file = os.path.join(self.report_dir,
                                              'cov_summary.json')
-
-        # Use region coverage as coverage metric instead of branch (default)
-        self.region_coverage = region_coverage
 
     def get_profraw_files(self):
         """Return generated profraw files."""
@@ -394,9 +404,13 @@ class SnapshotMeasurer(coverage_utils.TrialCoverage):  # pylint: disable=too-man
     def run_cov_new_units(self):
         """Run the coverage binary on new units."""
         coverage_binary = coverage_utils.get_coverage_binary(self.benchmark)
-        run_coverage.do_coverage_run(coverage_binary, self.corpus_dir,
-                                     self.profraw_file_pattern,
-                                     self.crashes_dir)
+        crashing_units = run_coverage.do_coverage_run(coverage_binary,
+                                                      self.corpus_dir,
+                                                      self.profraw_file_pattern,
+                                                      self.crashes_dir)
+
+        self.UNIT_BLACKLIST[self.benchmark] = (
+            self.UNIT_BLACKLIST[self.benchmark].union(set(crashing_units)))
 
     def generate_summary(self, cycle: int, summary_only=False):
         """Transforms the .profdata file into json form."""
@@ -422,14 +436,11 @@ class SnapshotMeasurer(coverage_utils.TrialCoverage):  # pylint: disable=too-man
         try:
             coverage_info = coverage_utils.get_coverage_infomation(
                 self.cov_summary_file)
-            coverage_data = coverage_info['data'][0]
-            summary_data = coverage_data['totals']
-            if self.region_coverage:
-                code_coverage_data = summary_data['regions']
-            else:
-                code_coverage_data = summary_data['branches']
-            code_coverage = code_coverage_data['covered']
-            return code_coverage
+            coverage_data = coverage_info["data"][0]
+            summary_data = coverage_data["totals"]
+            regions_coverage_data = summary_data["regions"]
+            regions_covered = regions_coverage_data["covered"]
+            return regions_covered
         except Exception:  # pylint: disable=broad-except
             self.logger.error(
                 'Coverage summary json file defective or missing.')
@@ -466,13 +477,54 @@ class SnapshotMeasurer(coverage_utils.TrialCoverage):  # pylint: disable=too-man
             return
         self.generate_summary(cycle)
 
+    def is_cycle_unchanged(self, cycle: int) -> bool:
+        """Returns True if |cycle| is unchanged according to the
+        unchanged-cycles file. This file is written to by the trial's runner."""
+
+        def copy_unchanged_cycles_file():
+            unchanged_cycles_filestore_path = exp_path.filestore(
+                self.unchanged_cycles_path)
+            result = filestore_utils.cp(unchanged_cycles_filestore_path,
+                                        self.unchanged_cycles_path,
+                                        expect_zero=False)
+            return result.retcode == 0
+
+        if not os.path.exists(self.unchanged_cycles_path):
+            if not copy_unchanged_cycles_file():
+                return False
+
+        def get_unchanged_cycles():
+            return [
+                int(cycle) for cycle in filesystem.read(
+                    self.unchanged_cycles_path).splitlines()
+            ]
+
+        unchanged_cycles = get_unchanged_cycles()
+        if cycle in unchanged_cycles:
+            return True
+
+        if cycle < max(unchanged_cycles):
+            # If the last/max unchanged cycle is greater than |cycle| then we
+            # don't need to copy the file again.
+            return False
+
+        if not copy_unchanged_cycles_file():
+            return False
+
+        unchanged_cycles = get_unchanged_cycles()
+        return cycle in unchanged_cycles
+
     def extract_corpus(self, corpus_archive_path) -> bool:
         """Extract the corpus archive for this cycle if it exists."""
         if not os.path.exists(corpus_archive_path):
             self.logger.warning('Corpus not found: %s.', corpus_archive_path)
             return False
 
-        extract_corpus(corpus_archive_path, self.corpus_dir)
+        already_measured_units = self.get_measured_files()
+        crash_blacklist = self.UNIT_BLACKLIST[self.benchmark]
+        unit_blacklist = already_measured_units.union(crash_blacklist)
+
+        extract_corpus(corpus_archive_path, unit_blacklist, self.corpus_dir)
         return True
 
     def save_crash_files(self, cycle):
@@ -491,7 +543,8 @@ class SnapshotMeasurer(coverage_utils.TrialCoverage):  # pylint: disable=too-man
 
     def process_crashes(self, cycle):
         """Process and store crashes."""
-        is_bug_benchmark = benchmark_utils.get_type(self.benchmark) == 'bug'
+        benchmark_type = benchmark_config.get_config(self.benchmark).get('type')
+        is_bug_benchmark = benchmark_type == 'bug'
         if not is_bug_benchmark:
             return []
 
@@ -507,7 +560,8 @@ class SnapshotMeasurer(coverage_utils.TrialCoverage):  # pylint: disable=too-man
         crash_metadata = run_crashes.do_crashes_run(app_binary,
                                                     self.crashes_dir)
         crashes = []
-        for crash_key, crash in crash_metadata.items():
+        for crash_key in crash_metadata:
+            crash = crash_metadata[crash_key]
             crashes.append(
                 models.Crash(crash_key=crash_key,
                              crash_testcase=crash.crash_testcase,
@@ -516,6 +570,21 @@ class SnapshotMeasurer(coverage_utils.TrialCoverage):  # pylint: disable=too-man
                              crash_state=crash.crash_state,
                              crash_stacktrace=crash.crash_stacktrace))
         return crashes
+
+    def update_measured_files(self):
+        """Updates the measured-files.txt file for this trial with
+        files measured in this snapshot."""
+        current_files = set(os.listdir(self.corpus_dir))
+        already_measured = self.get_measured_files()
+        filesystem.write(self.measured_files_path,
+                         '\n'.join(current_files.union(already_measured)))
+
+    def get_measured_files(self):
+        """Returns a the set of files that have been measured for this
+        snapshot's trials."""
+        if not os.path.exists(self.measured_files_path):
+            return set()
+        return set(filesystem.read(self.measured_files_path).splitlines())
 
     def get_fuzzer_stats(self, cycle):
         """Get the fuzzer stats for |cycle|."""
@@ -542,9 +611,9 @@ def get_fuzzer_stats(stats_filestore_path):
     return json.loads(stats_str)
 
 
-def measure_trial_coverage(measure_req, max_cycle: int,
-                           multiprocessing_queue: multiprocessing.Queue,
-                           region_coverage) -> models.Snapshot:
+def measure_trial_coverage(  # pylint: disable=invalid-name
+        measure_req, max_cycle: int,
+        q: multiprocessing.Queue) -> models.Snapshot:
     """Measure the coverage obtained by |trial_num| on |benchmark| using
     |fuzzer|."""
     initialize_logs()
@@ -555,11 +624,10 @@ def measure_trial_coverage(measure_req, max_cycle: int,
         try:
             snapshot = measure_snapshot_coverage(measure_req.fuzzer,
                                                  measure_req.benchmark,
-                                                 measure_req.trial_id, cycle,
-                                                 region_coverage)
+                                                 measure_req.trial_id, cycle)
             if not snapshot:
                 break
-            multiprocessing_queue.put(snapshot)
+            q.put(snapshot)
         except Exception:  # pylint: disable=broad-except
             logger.error('Error measuring cycle.',
                          extras={
@@ -572,23 +640,33 @@ def measure_trial_coverage(measure_req, max_cycle: int,
 
 
 def measure_snapshot_coverage(  # pylint: disable=too-many-locals
-        fuzzer: str, benchmark: str, trial_num: int, cycle: int,
-        region_coverage: bool) -> models.Snapshot:
+        fuzzer: str, benchmark: str, trial_num: int,
+        cycle: int) -> models.Snapshot:
     """Measure coverage of the snapshot for |cycle| for |trial_num| of |fuzzer|
     and |benchmark|."""
-    snapshot_logger = logs.Logger(
-        default_extras={
-            'fuzzer': fuzzer,
-            'benchmark': benchmark,
-            'trial_id': str(trial_num),
-            'cycle': str(cycle),
-        })
+    snapshot_logger = logs.Logger('measurer',
+                                  default_extras={
+                                      'fuzzer': fuzzer,
+                                      'benchmark': benchmark,
+                                      'trial_id': str(trial_num),
+                                      'cycle': str(cycle),
+                                  })
     snapshot_measurer = SnapshotMeasurer(fuzzer, benchmark, trial_num,
-                                         snapshot_logger, region_coverage)
+                                         snapshot_logger)
 
     measuring_start_time = time.time()
     snapshot_logger.info('Measuring cycle: %d.', cycle)
     this_time = experiment_utils.get_cycle_time(cycle)
+    if snapshot_measurer.is_cycle_unchanged(cycle):
+        snapshot_logger.info('Cycle: %d is unchanged.', cycle)
+        regions_covered = snapshot_measurer.get_current_coverage()
+        fuzzer_stats_data = snapshot_measurer.get_fuzzer_stats(cycle)
+        return models.Snapshot(time=this_time,
+                               trial_id=trial_num,
+                               edges_covered=regions_covered,
+                               fuzzer_stats=fuzzer_stats_data,
+                               crashes=[])
+
     corpus_archive_dst = os.path.join(
         snapshot_measurer.trial_dir, 'corpus',
         experiment_utils.get_corpus_archive_name(cycle))
@@ -615,40 +693,20 @@ def measure_snapshot_coverage(  # pylint: disable=too-many-locals
     # Generate profdata and transform it into json form.
     snapshot_measurer.generate_coverage_information(cycle)
 
-    # Compress and save the exported profdata snapshot.
-    coverage_archive_zipped = os.path.join(
-        snapshot_measurer.trial_dir, 'coverage',
-        experiment_utils.get_coverage_archive_name(cycle) + '.gz')
-
-    coverage_archive_dir = os.path.dirname(coverage_archive_zipped)
-    if not os.path.exists(coverage_archive_dir):
-        os.makedirs(coverage_archive_dir)
-
-    with gzip.open(str(coverage_archive_zipped), 'wb') as compressed:
-        with open(snapshot_measurer.cov_summary_file, 'rb') as uncompressed:
-            # avoid saving warnings so we can direct import with pandas
-            compressed.write(uncompressed.readlines()[-1])
-
-    coverage_archive_dst = exp_path.filestore(coverage_archive_zipped)
-    if filestore_utils.cp(coverage_archive_zipped,
-                          coverage_archive_dst,
-                          expect_zero=False).retcode:
-        snapshot_logger.warning('Coverage not found for cycle: %d.', cycle)
-        return None
-
-    os.remove(coverage_archive_zipped)  # no reason to keep this around
-
     # Run crashes again, parse stacktraces and generate crash signatures.
     crashes = snapshot_measurer.process_crashes(cycle)
 
-    # Get the coverage summary of the new corpus units.
-    branches_covered = snapshot_measurer.get_current_coverage()
+    # Get the coverage of the new corpus units.
+    regions_covered = snapshot_measurer.get_current_coverage()
     fuzzer_stats_data = snapshot_measurer.get_fuzzer_stats(cycle)
     snapshot = models.Snapshot(time=this_time,
                                trial_id=trial_num,
-                               edges_covered=branches_covered,
+                               edges_covered=regions_covered,
                                fuzzer_stats=fuzzer_stats_data,
                                crashes=crashes)
+
+    # Record the new corpus files.
+    snapshot_measurer.update_measured_files()
 
     measuring_time = round(time.time() - measuring_start_time, 2)
     snapshot_logger.info('Measured cycle: %d in %f seconds.', cycle,
@@ -677,15 +735,15 @@ def set_up_coverage_binary(benchmark):
     coverage_binaries_dir = build_utils.get_coverage_binaries_dir()
     benchmark_coverage_binary_dir = coverage_binaries_dir / benchmark
     filesystem.create_directory(benchmark_coverage_binary_dir)
-    archive_name = f'coverage-build-{benchmark}.tar.gz'
+    archive_name = 'coverage-build-%s.tar.gz' % benchmark
     archive_filestore_path = exp_path.filestore(coverage_binaries_dir /
                                                 archive_name)
     filestore_utils.cp(archive_filestore_path,
                        str(benchmark_coverage_binary_dir))
     archive_path = benchmark_coverage_binary_dir / archive_name
-    with tarfile.open(archive_path, 'r:gz') as tar:
-        tar.extractall(benchmark_coverage_binary_dir)
-        os.remove(archive_path)
+    tar = tarfile.open(archive_path, 'r:gz')
+    tar.extractall(benchmark_coverage_binary_dir)
+    os.remove(archive_path)
 
 
 def initialize_logs():
@@ -694,134 +752,6 @@ def initialize_logs():
         'component': 'dispatcher',
         'subcomponent': 'measurer',
     })
-
-
-def consume_snapshots_from_response_queue(
-        response_queue, queued_snapshots) -> List[models.Snapshot]:
-    """Consume response_queue, allows retry objects to retried, and
-    return all measured snapshots in a list."""
-    measured_snapshots = []
-    while True:
-        try:
-            response_object = response_queue.get_nowait()
-            if isinstance(response_object, measurer_datatypes.RetryRequest):
-                # Need to retry measurement task, will remove identifier from
-                # the set so task can be retried in next loop iteration.
-                snapshot_identifier = (response_object.trial_id,
-                                       response_object.cycle)
-                queued_snapshots.remove(snapshot_identifier)
-                logger.info('Reescheduling task for trial %s and cycle %s',
-                            response_object.trial_id, response_object.cycle)
-            elif isinstance(response_object, models.Snapshot):
-                measured_snapshots.append(response_object)
-            else:
-                logger.error('Type of response object not mapped! %s',
-                             type(response_object))
-        except queue.Empty:
-            break
-    return measured_snapshots
-
-
-def measure_manager_inner_loop(experiment: str, max_cycle: int, request_queue,
-                               response_queue, queued_snapshots):
-    """Reads from database to determine which snapshots needs measuring. Write
-    measurements tasks to request queue, get results from response queue, and
-    write measured snapshots to database. Returns False if there's no more
-    snapshots left to be measured"""
-    initialize_logs()
-    # Read database to determine which snapshots needs measuring.
-    unmeasured_snapshots = get_unmeasured_snapshots(experiment, max_cycle)
-    logger.info('Retrieved %d unmeasured snapshots from measure manager',
-                len(unmeasured_snapshots))
-    # When there are no more snapshots left to be measured, should break loop.
-    if not unmeasured_snapshots:
-        return False
-
-    # Write measurements requests to request queue
-    for unmeasured_snapshot in unmeasured_snapshots:
-        # No need to insert fuzzer and benchmark info here as it's redundant
-        # (Can be retrieved through trial_id).
-        unmeasured_snapshot_identifier = (unmeasured_snapshot.trial_id,
-                                          unmeasured_snapshot.cycle)
-        # Checking if snapshot already was queued so workers will not repeat
-        # measurement for same snapshot
-        if unmeasured_snapshot_identifier not in queued_snapshots:
-            request_queue.put(unmeasured_snapshot)
-            queued_snapshots.add(unmeasured_snapshot_identifier)
-
-    # Read results from response queue.
-    measured_snapshots = consume_snapshots_from_response_queue(
-        response_queue, queued_snapshots)
-    logger.info('Retrieved %d measured snapshots from response queue',
-                len(measured_snapshots))
-
-    # Save measured snapshots to database.
-    if measured_snapshots:
-        db_utils.add_all(measured_snapshots)
-
-    return True
-
-
-def get_pool_args(measurers_cpus, runners_cpus):
-    """Return pool args based on measurer cpus and runner cpus arguments."""
-    if measurers_cpus is None or runners_cpus is None:
-        return ()
-
-    local_experiment = experiment_utils.is_local_experiment()
-    if not local_experiment:
-        return (measurers_cpus,)
-
-    cores_queue = multiprocessing.Queue()
-    logger.info('Scheduling measurers from core %d to %d.', runners_cpus,
-                runners_cpus + measurers_cpus - 1)
-    for cpu in range(runners_cpus, runners_cpus + measurers_cpus):
-        cores_queue.put(cpu)
-    return (measurers_cpus, _process_init, (cores_queue,))
-
-
-def measure_manager_loop(experiment: str,
-                         max_total_time: int,
-                         measurers_cpus=None,
-                         region_coverage=False):  # pylint: disable=too-many-locals
-    """Measure manager loop. Creates request and response queues, request
-    measurements tasks from workers, retrieve measurement results from response
-    queue and writes measured snapshots in database."""
-    logger.info('Starting measure manager loop.')
-    if not measurers_cpus:
-        measurers_cpus = multiprocessing.cpu_count()
-        logger.info('Number of measurer CPUs not passed as argument. using %d',
-                    measurers_cpus)
-    with multiprocessing.Pool() as pool, multiprocessing.Manager() as manager:
-        logger.info('Setting up coverage binaries')
-        set_up_coverage_binaries(pool, experiment)
-        request_queue = manager.Queue()
-        response_queue = manager.Queue()
-
-        config = {
-            'request_queue': request_queue,
-            'response_queue': response_queue,
-            'region_coverage': region_coverage,
-        }
-        local_measure_worker = measure_worker.LocalMeasureWorker(config)
-
-        # Since each worker is going to be in an infinite loop, we dont need
-        # result return. Workers' life scope will end automatically when there
-        # are no more snapshots left to measure.
-        logger.info('Starting measure worker loop for %d workers',
-                    measurers_cpus)
-        for _ in range(measurers_cpus):
-            _result = pool.apply_async(local_measure_worker.measure_worker_loop)
-
-        max_cycle = _time_to_cycle(max_total_time)
-        queued_snapshots = set()
-        while not scheduler.all_trials_ended(experiment):
-            continue_inner_loop = measure_manager_inner_loop(
-                experiment, max_cycle, request_queue, response_queue,
-                queued_snapshots)
-            if not continue_inner_loop:
-                break
-            time.sleep(MEASUREMENT_LOOP_WAIT)
-        logger.info('All trials ended. Ending measure manager loop')
 
 
 def main():

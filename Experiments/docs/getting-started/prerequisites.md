@@ -23,6 +23,7 @@ Clone the FuzzBench repository to your machine by running the following command:
 ```bash
 git clone https://github.com/google/fuzzbench
 cd fuzzbench
+git submodule update --init
 ```
 
 ## Installing prerequisites
@@ -57,18 +58,18 @@ sudo apt-get install build-essential
 
 ### Python programming language
 
-[Download Python 3.10](https://www.python.org/downloads/release/python-3108/),
+[Download Python 3.8](https://www.python.org/downloads/release/python-386/),
 then install it.
 
 If you already have Python installed, you can verify its version by running
-`python3 --version`. The minimum required version is 3.10.8.
+`python3 --version`. The minimum required version is 3.8.
 
 ### Python package dependencies
 
 Install the python dependencies by running the following command:
 
 ```bash
-sudo apt-get install python3.10-dev python3.10-venv
+sudo apt-get install python3.8-dev python3.8-venv
 make install-dependencies
 ```
 

@@ -41,11 +41,7 @@ BENCHMARK_TYPE_STRS = {benchmark_type.value for benchmark_type in BenchmarkType}
 
 def get_fuzz_target(benchmark):
     """Returns the fuzz target of |benchmark|"""
-    # Do this because of OSS-Fuzz-on-demand.
-    # TODO(metzman): Use classes to mock a benchmark config for
-    # OSS_FUZZ_ON_DEMAND.
-    return benchmark_config.get_config(benchmark).get(
-        'fuzz_target', environment.get('FUZZ_TARGET'))
+    return benchmark_config.get_config(benchmark)['fuzz_target']
 
 
 def get_project(benchmark):
@@ -53,30 +49,33 @@ def get_project(benchmark):
     return benchmark_config.get_config(benchmark)['project']
 
 
-def get_oss_fuzz_corpus_target(benchmark):
-    """Returns oss-fuzz corpus fuzz target of |benchmark|"""
-    return benchmark_config.get_config(benchmark).get('oss_fuzz_corpus_target')
-
-
 def get_type(benchmark):
     """Returns the type of |benchmark|"""
-    # TODO(metzman): Use classes to mock a benchmark config for
-    # OSS_FUZZ_ON_DEMAND.
-    default_value = os.getenv('EXPERIMENT_TYPE', BenchmarkType.CODE.value)
-    return benchmark_config.get_config(benchmark).get('type', default_value)
+    return benchmark_config.get_config(benchmark).get('type',
+                                                      BenchmarkType.CODE.value)
+
+
+def is_oss_fuzz_benchmark(benchmark):
+    """Returns if benchmark is a OSS-Fuzz benchmark."""
+    return bool(benchmark_config.get_config(benchmark).get('commit_date'))
 
 
 def get_runner_image_url(experiment, benchmark, fuzzer, docker_registry):
     """Get the URL of the docker runner image for fuzzing the benchmark with
     fuzzer."""
     tag = 'latest' if environment.get('LOCAL_EXPERIMENT') else experiment
-    return f'{docker_registry}/runners/{fuzzer}/{benchmark}:{tag}'
+    return '{docker_registry}/runners/{fuzzer}/{benchmark}:{tag}'.format(
+        docker_registry=docker_registry,
+        fuzzer=fuzzer,
+        benchmark=benchmark,
+        tag=tag)
 
 
 def get_builder_image_url(benchmark, fuzzer, docker_registry):
     """Get the URL of the docker builder image for fuzzing the benchmark with
     fuzzer."""
-    return f'{docker_registry}/builders/{fuzzer}/{benchmark}'
+    return '{docker_registry}/builders/{fuzzer}/{benchmark}'.format(
+        docker_registry=docker_registry, fuzzer=fuzzer, benchmark=benchmark)
 
 
 def validate_name(benchmark):
@@ -133,18 +132,34 @@ def get_all_benchmarks():
     return sorted(all_benchmarks)
 
 
-def get_coverage_benchmarks(benchmarks=get_all_benchmarks()):
+def get_coverage_benchmarks():
     """Returns the list of all coverage benchmarks."""
+    return (get_oss_fuzz_coverage_benchmarks() +
+            get_standard_coverage_benchmarks())
+
+
+def get_oss_fuzz_coverage_benchmarks():
+    """Returns the list of OSS-Fuzz coverage benchmarks."""
     return [
-        benchmark for benchmark in benchmarks
-        if get_type(benchmark) == BenchmarkType.CODE.value
+        benchmark for benchmark in get_all_benchmarks()
+        if is_oss_fuzz_benchmark(benchmark) and
+        get_type(benchmark) == BenchmarkType.CODE.value
     ]
 
 
-def get_bug_benchmarks(benchmarks=get_all_benchmarks()):
+def get_standard_coverage_benchmarks():
+    """Returns the list of standard coverage benchmarks."""
+    return [
+        benchmark for benchmark in get_all_benchmarks()
+        if not is_oss_fuzz_benchmark(benchmark) and
+        get_type(benchmark) == BenchmarkType.CODE.value
+    ]
+
+
+def get_bug_benchmarks():
     """Returns the list of standard bug benchmarks."""
     return [
-        benchmark for benchmark in benchmarks
+        benchmark for benchmark in get_all_benchmarks()
         if get_type(benchmark) == BenchmarkType.BUG.value
     ]
 
@@ -163,15 +178,3 @@ def get_language(benchmark):
     """Returns the prorgamming language the benchmark was written in."""
     config = benchmark_config.get_config(benchmark)
     return config.get('language', 'c++')
-
-
-def are_benchmarks_mixed(benchmarks=None):
-    """Returns True if benchmarks list is a mix of bugs and coverage
-    benchmarks."""
-    if benchmarks is None:
-        benchmarks = get_all_benchmarks()
-
-    unique_benchmarks_types = set(
-        get_type(benchmark) for benchmark in benchmarks)
-
-    return len(unique_benchmarks_types) > 1

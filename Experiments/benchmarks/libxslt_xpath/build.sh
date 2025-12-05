@@ -16,19 +16,9 @@
 #
 ################################################################################
 
-if [ "$SANITIZER" = undefined ]; then
-    export CFLAGS="$CFLAGS -fsanitize=unsigned-integer-overflow -fno-sanitize-recover=unsigned-integer-overflow"
-    export CXXFLAGS="$CXXFLAGS -fsanitize=unsigned-integer-overflow -fno-sanitize-recover=unsigned-integer-overflow"
-fi
-
-if [ "$SANITIZER" = memory ]; then
-    # This would require an instrumented libgcrypt build.
-    CRYPTO_CONF=--without-crypto
-    CRYPTO_LIBS=
-else
-    CRYPTO_CONF=--with-crypto
-    CRYPTO_LIBS=-lgcrypt
-fi
+# This would require an instrumented libgcrypt build.
+CRYPTO_CONF=--with-crypto
+CRYPTO_LIBS=-lgcrypt
 
 cd ../libxml2
 ./autogen.sh \
@@ -59,7 +49,7 @@ cd ../libxslt
     --without-profiler
 make -j$(nproc) V=1
 
-for file in xpath xslt fuzz; do
+for file in xpath fuzz; do
     # Compile as C
     $CC $CFLAGS \
         -I. -I../libxml2/include \
@@ -67,7 +57,7 @@ for file in xpath xslt fuzz; do
         -o tests/fuzz/$file.o
 done
 
-for fuzzer in xpath xslt; do
+for fuzzer in xpath; do
     # Link with $CXX
     $CXX $CXXFLAGS \
         tests/fuzz/$fuzzer.o tests/fuzz/fuzz.o \
@@ -80,4 +70,4 @@ for fuzzer in xpath xslt; do
     zip -j $OUT/${fuzzer}_seed_corpus.zip tests/fuzz/seed/$fuzzer/*
 done
 
-cp tests/fuzz/*.dict tests/fuzz/*.xml $OUT/
+cp tests/fuzz/xpath.dict tests/fuzz/xpath.xml $OUT/

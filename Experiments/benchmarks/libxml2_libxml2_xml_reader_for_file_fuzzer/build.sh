@@ -16,4 +16,15 @@
 #
 ################################################################################
 
-fuzz/oss-fuzz-build.sh
+./autogen.sh
+./configure --without-python --with-threads=no --with-zlib=no --with-lzma=no
+make -j$(nproc) clean
+make -j$(nproc) all
+
+$CXX $CXXFLAGS -std=c++11 -Iinclude/ \
+    $SRC/libxml2_xml_reader_for_file_fuzzer.cc \
+    -o $OUT/libxml2_xml_reader_for_file_fuzzer \
+    $LIB_FUZZING_ENGINE .libs/libxml2.a
+
+cp $SRC/xml.dict $OUT/libxml2_xml_reader_for_file_fuzzer.dict
+zip -r $OUT/libxml2_xml_reader_for_file_fuzzer_seed_corpus.zip $SRC/libxml2/test

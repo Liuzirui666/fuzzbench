@@ -16,18 +16,11 @@
 ################################################################################
 
 # Build pcre dependency to be linked statically.
-pushd $SRC/pcre2
+pushd $SRC/pcre
 ./autogen.sh
-if [ "$SANITIZER" == "introspector" ]; then
-  # Disable sanitizers for introspector for pcre. We only care about njs and it's blocking the build.
-  CFLAGS="" CXXFLAGS="" LIB_FUZZING_ENGINE="" ./configure
-else
-  CFLAGS="$CFLAGS -fno-use-cxa-atexit" CXXFLAGS="$CXXFLAGS -fno-use-cxa-atexit" ./configure
-fi
+CFLAGS="$CFLAGS -fno-use-cxa-atexit" CXXFLAGS="$CXXFLAGS -fno-use-cxa-atexit" ./configure
 make -j$(nproc) clean
 make -j$(nproc) all
-make install
-sed -i "s/\$libS\$libR \(-lpcre2-8$\)/\$libS\$libR -Wl,-Bstatic \1 -Wl,-Bdynamic/" /usr/local/bin/pcre2-config
 popd
 
 # build project
@@ -42,17 +35,14 @@ SEED_CORPUS_PATH=$OUT/njs_process_script_fuzzer_seed_corpus
 mkdir -p $SEED_CORPUS_PATH
 
 set +x
-cat src/test/njs_unit_test.c \
+cat src/test/njs_interactive_test.c src/test/njs_unit_test.c \
     | egrep -o '".*"' | awk '{print substr($0,2,length($0)-2)}' | sort | uniq \
     | while IFS= read -r line; do
       echo $line > $SEED_CORPUS_PATH/$(echo $line | sha1sum | awk '{ print $1 }');
     done
-
-find test/ -name *.t.js \
-    | while IFS= read -r testname; do
-        cp $testname $SEED_CORPUS_PATH/$(echo $testname | sha1sum | awk '{ print $1 }');
-      done
 set -x
+
+cp -r test/fs test/module $SEED_CORPUS_PATH
 
 zip -q $SEED_CORPUS_PATH.zip $SEED_CORPUS_PATH
 rm -rf $SEED_CORPUS_PATH

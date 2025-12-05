@@ -22,7 +22,7 @@ from common import yaml_utils
 from common.utils import ROOT_DIR
 from experiment.build import build_utils
 
-DOCKER_IMAGE = 'gcr.io/cloud-builders/docker'
+DOCKER_IMAGE = 'docker:19.03.12'
 STANDARD_DOCKER_REGISTRY = 'gcr.io/fuzzbench'
 
 
@@ -81,7 +81,7 @@ def _get_cachable_image_tag(image_specs):
     return _get_image_tag(image_specs)
 
 
-def get_coverage_steps(benchmark: str):
+def coverage_steps(benchmark):
     """Returns GCB run steps for coverage builds."""
     coverage_binaries_dir = exp_path.filestore(
         build_utils.get_coverage_binaries_dir())
@@ -117,22 +117,9 @@ def get_docker_registry():
     return os.environ['DOCKER_REGISTRY']
 
 
-def get_cloudbuild_tags(fuzzer, benchmark):
-    """Returns cloudbuild tags that are useful for identifying a build."""
-    experiment = os.environ['EXPERIMENT']
-    tags = [experiment]
-    if fuzzer:
-        tags.append(fuzzer)
-    if benchmark:
-        tags.append(benchmark)
-    return tags
-
-
 def create_cloudbuild_spec(image_templates,
-                           benchmark,
-                           fuzzer,
-                           build_base_images=False,
-                           cloudbuild_tags=None):
+                           benchmark='',
+                           build_base_images=False):
     """Generates Cloud Build specification.
 
     Args:
@@ -145,10 +132,15 @@ def create_cloudbuild_spec(image_templates,
     """
     cloudbuild_spec = {'steps': [], 'images': []}
 
-    if cloudbuild_tags is None:
-        cloudbuild_tags = get_cloudbuild_tags(fuzzer, benchmark)
-    if cloudbuild_tags:
-        cloudbuild_spec['tags'] = cloudbuild_tags
+    # Workaround for bug https://github.com/moby/moby/issues/40262.
+    # This is only needed for base-image as it inherits from ubuntu:xenial.
+    if build_base_images:
+        cloudbuild_spec['steps'].append({
+            'id': 'pull-ubuntu-xenial',
+            'env': ['DOCKER_BUILDKIT=1'],
+            'name': DOCKER_IMAGE,
+            'args': ['pull', 'ubuntu:xenial'],
+        })
 
     for image_name, image_specs in image_templates.items():
         step = {
@@ -157,17 +149,12 @@ def create_cloudbuild_spec(image_templates,
             'name': DOCKER_IMAGE,
         }
         step['args'] = [
-            'build',
-            '--tag',
-            _get_experiment_image_tag(image_specs),
-            '--tag',
-            _get_gcb_image_tag(image_specs),
-            '--tag',
-            _get_cachable_image_tag(image_specs),
-            '--cache-from',
-            _get_cachable_image_tag(image_specs),
-            '--build-arg',
-            'BUILDKIT_INLINE_CACHE=1',
+            'build', '--tag',
+            _get_experiment_image_tag(image_specs), '--tag',
+            _get_gcb_image_tag(image_specs), '--tag',
+            _get_cachable_image_tag(image_specs), '--cache-from',
+            _get_cachable_image_tag(image_specs), '--build-arg',
+            'BUILDKIT_INLINE_CACHE=1'
         ]
         for build_arg in image_specs.get('build_arg', []):
             step['args'] += ['--build-arg', build_arg]
@@ -189,8 +176,7 @@ def create_cloudbuild_spec(image_templates,
 
     if any(image_specs['type'] in 'coverage'
            for _, image_specs in image_templates.items()):
-        assert benchmark is not None, 'Coverage build need benchmark'
-        cloudbuild_spec['steps'] += get_coverage_steps(benchmark)
+        cloudbuild_spec['steps'] += coverage_steps(benchmark)
 
     return cloudbuild_spec
 
@@ -200,10 +186,7 @@ def main():
     image_templates = yaml_utils.read(
         os.path.join(ROOT_DIR, 'docker', 'image_types.yaml'))
     base_images_spec = create_cloudbuild_spec(
-        {'base-image': image_templates['base-image']},
-        build_base_images=True,
-        benchmark=None,
-        fuzzer=None)
+        {'base-image': image_templates['base-image']}, build_base_images=True)
     base_images_spec_file = os.path.join(ROOT_DIR, 'docker', 'gcb',
                                          'base-images.yaml')
     yaml_utils.write(base_images_spec_file, base_images_spec)

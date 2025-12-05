@@ -15,24 +15,27 @@
 #
 ################################################################################
 
+# to not crash for every input...
+export CFLAGS="$CFLAGS -fno-sanitize=integer-divide-by-zero,float-divide-by-zero,shift,array-bounds"
+
 # build quickjs
+# Makefile should honor CC and AR
+sed -i -e 's/CC=/CC?=/' Makefile
+sed -i -e 's/AR=/AR?=/' Makefile
 # Makefile should not override CFLAGS
 sed -i -e 's/CFLAGS=/CFLAGS+=/' Makefile
-sed -i -e 's/#define USE_WORKER/\/\/#define USE_WORKER/' quickjs-libc.c
-CONFIG_CLANG=y make libquickjs.fuzz.a .obj/fuzz_common.o .obj/libregexp.fuzz.o .obj/cutils.fuzz.o .obj/libunicode.fuzz.o
-zip -r $OUT/fuzz_eval_seed_corpus.zip $SRC/quickjs-corpus/js/*.js
-zip -r $OUT/fuzz_compile_seed_corpus.zip $SRC/quickjs-corpus/js/*.js
+CONFIG_CLANG=y make libquickjs.a
 
-build_fuzz_target () {
-    local target=$1
-    shift
-    $CC $CFLAGS -I. -c fuzz/$target.c -o $target.o
-    $CXX $CXXFLAGS $target.o -o $OUT/$target $@ $LIB_FUZZING_ENGINE
-}
+# seeds
+zip -r $OUT/fuzz_eval_seed_corpus.zip tests/*.js
+zip -r $OUT/fuzz_eval_seed_corpus.zip examples/*.js
 
-build_fuzz_target fuzz_eval .obj/fuzz_common.o libquickjs.fuzz.a
-build_fuzz_target fuzz_compile .obj/fuzz_common.o libquickjs.fuzz.a
-build_fuzz_target fuzz_regexp .obj/libregexp.fuzz.o .obj/cutils.fuzz.o .obj/libunicode.fuzz.o
+# dict
+cp $SRC/js.dict $OUT/fuzz_eval.dict
 
-cp fuzz/fuzz.dict $OUT/fuzz_eval.dict
-cp fuzz/fuzz.dict $OUT/fuzz_compile.dict
+cd ..
+FUZZ_TARGETS="fuzz_eval"
+for f in $FUZZ_TARGETS; do
+    $CC $CFLAGS -Iquickjs -c $f.c -o $f.o
+    $CXX $CXXFLAGS $f.o -o $OUT/$f quickjs/libquickjs.a $LIB_FUZZING_ENGINE
+done

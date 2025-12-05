@@ -14,7 +14,6 @@
 """Common utilities."""
 
 import hashlib
-import http.client
 import os
 import urllib.request
 import urllib.error
@@ -47,12 +46,9 @@ def is_local():
         return _is_local
     try:
         # TODO(github.com/google/fuzzbench/issues/82): Get rid of this.
-        with urllib.request.urlopen('http://metadata.google.internal'):
-            pass
+        urllib.request.urlopen('http://metadata.google.internal')
         _is_local = False
     except urllib.error.URLError:
-        _is_local = True
-    except http.client.RemoteDisconnected:
         _is_local = True
     return _is_local
 
@@ -73,10 +69,3 @@ def file_hash(file_path):
             chunk = file_handle.read(chunk_size)
 
     return digest.hexdigest()
-
-
-# Calculate a retry delay based on the current try,
-# a default delay, and an exponential backoff
-def get_retry_delay(num_try, delay, backoff):
-    """Compute backoff delay."""
-    return delay * (backoff**(num_try - 1))

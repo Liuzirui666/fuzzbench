@@ -30,13 +30,18 @@ def test_generate_cloudbuild_spec_build_base_image(experiment):
         }
     }
     generated_spec = generate_cloudbuild.create_cloudbuild_spec(
-        image_templates, benchmark=None, fuzzer=None, build_base_images=True)
+        image_templates, build_base_images=True)
 
     expected_spec = {
         'steps': [{
+            'id': 'pull-ubuntu-xenial',
+            'env': ['DOCKER_BUILDKIT=1'],
+            'name': 'docker:19.03.12',
+            'args': ['pull', 'ubuntu:xenial']
+        }, {
             'id': 'base-image',
             'env': ['DOCKER_BUILDKIT=1'],
-            'name': 'gcr.io/cloud-builders/docker',
+            'name': 'docker:19.03.12',
             'args': [
                 'build', '--tag', 'gcr.io/fuzzbench/base-image:test-experiment',
                 '--tag', 'gcr.io/fuzzbench/base-image', '--tag',
@@ -50,8 +55,7 @@ def test_generate_cloudbuild_spec_build_base_image(experiment):
         'images': [
             'gcr.io/fuzzbench/base-image:test-experiment',
             'gcr.io/fuzzbench/base-image'
-        ],
-        'tags': ['test-experiment'],
+        ]
     }
 
     assert generated_spec == expected_spec
@@ -71,13 +75,18 @@ def test_generate_cloudbuild_spec_other_registry(experiment):
         }
     }
     generated_spec = generate_cloudbuild.create_cloudbuild_spec(
-        image_templates, benchmark=None, fuzzer=None, build_base_images=True)
+        image_templates, build_base_images=True)
 
     expected_spec = {
         'steps': [{
+            'id': 'pull-ubuntu-xenial',
+            'env': ['DOCKER_BUILDKIT=1'],
+            'name': 'docker:19.03.12',
+            'args': ['pull', 'ubuntu:xenial']
+        }, {
             'id': 'base-image',
             'env': ['DOCKER_BUILDKIT=1'],
-            'name': 'gcr.io/cloud-builders/docker',
+            'name': 'docker:19.03.12',
             'args': [
                 'build', '--tag', 'gcr.io/not-fuzzbench/base-image'
                 ':test-experiment', '--tag', 'gcr.io/fuzzbench/base-image',
@@ -91,8 +100,7 @@ def test_generate_cloudbuild_spec_other_registry(experiment):
         'images': [
             'gcr.io/not-fuzzbench/base-image:test-experiment',
             'gcr.io/not-fuzzbench/base-image'
-        ],
-        'tags': ['test-experiment'],
+        ]
     }
 
     assert generated_spec == expected_spec
@@ -114,17 +122,13 @@ def test_generate_cloudbuild_spec_build_fuzzer_benchmark(experiment):
         }
     }
 
-    generated_spec = generate_cloudbuild.create_cloudbuild_spec(
-        image_templates,
-        benchmark='benchmark',
-        fuzzer='fuzzer',
-    )
+    generated_spec = generate_cloudbuild.create_cloudbuild_spec(image_templates)
 
     expected_spec = {
         'steps': [{
             'id': 'afl-zlib-builder-intermediate',
             'env': ['DOCKER_BUILDKIT=1'],
-            'name': 'gcr.io/cloud-builders/docker',
+            'name': 'docker:19.03.12',
             'args': [
                 'build', '--tag',
                 'gcr.io/fuzzbench/builders/afl/zlib-intermediate'
@@ -142,8 +146,7 @@ def test_generate_cloudbuild_spec_build_fuzzer_benchmark(experiment):
         'images': [
             'gcr.io/fuzzbench/builders/afl/zlib-intermediate:test-experiment',
             'gcr.io/fuzzbench/builders/afl/zlib-intermediate'
-        ],
-        'tags': ['test-experiment', 'fuzzer', 'benchmark'],
+        ]
     }
     assert generated_spec == expected_spec
 
@@ -183,13 +186,13 @@ def test_generate_cloudbuild_spec_build_benchmark_coverage(experiment):
     }
 
     generated_spec = generate_cloudbuild.create_cloudbuild_spec(
-        image_templates, benchmark='zlib', fuzzer='coverage')
+        image_templates, benchmark='zlib')
 
     expected_spec = {
         'steps': [{
             'id': 'zlib-project-builder',
             'env': ['DOCKER_BUILDKIT=1'],
-            'name': 'gcr.io/cloud-builders/docker',
+            'name': 'docker:19.03.12',
             'args': [
                 'build', '--tag',
                 'gcr.io/fuzzbench/builders/benchmark/zlib:test-experiment',
@@ -203,7 +206,7 @@ def test_generate_cloudbuild_spec_build_benchmark_coverage(experiment):
         }, {
             'id': 'coverage-zlib-builder-intermediate',
             'env': ['DOCKER_BUILDKIT=1'],
-            'name': 'gcr.io/cloud-builders/docker',
+            'name': 'docker:19.03.12',
             'args': [
                 'build', '--tag',
                 'gcr.io/fuzzbench/builders/coverage/zlib-intermediate:'
@@ -221,7 +224,7 @@ def test_generate_cloudbuild_spec_build_benchmark_coverage(experiment):
         }, {
             'id': 'coverage-zlib-builder',
             'env': ['DOCKER_BUILDKIT=1'],
-            'name': 'gcr.io/cloud-builders/docker',
+            'name': 'docker:19.03.12',
             'args': [
                 'build', '--tag',
                 'gcr.io/fuzzbench/builders/coverage/zlib:test-experiment',
@@ -237,7 +240,7 @@ def test_generate_cloudbuild_spec_build_benchmark_coverage(experiment):
             'wait_for': ['coverage-zlib-builder-intermediate']
         }, {
             'name':
-                'gcr.io/cloud-builders/docker',
+                'docker:19.03.12',
             'args': [
                 'run', '-v', '/workspace/out:/host-out',
                 'gcr.io/fuzzbench/builders/coverage/zlib:test-experiment',
@@ -261,8 +264,7 @@ def test_generate_cloudbuild_spec_build_benchmark_coverage(experiment):
             'gcr.io/fuzzbench/builders/coverage/zlib-intermediate',
             'gcr.io/fuzzbench/builders/coverage/zlib:test-experiment',
             'gcr.io/fuzzbench/builders/coverage/zlib'
-        ],
-        'tags': ['test-experiment', 'coverage', 'zlib'],
+        ]
     }
 
     assert generated_spec == expected_spec

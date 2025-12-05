@@ -14,17 +14,8 @@
 #
 ################################################################################
 
-FROM gcr.io/oss-fuzz-base/base-builder@sha256:87ca1e9e19235e731fac8de8d1892ebe8d55caf18e7aa131346fc582a2034fdd
-
-RUN apt-get update && \
-    apt-get install -y \
-        cmake \
-        ninja-build \
-        g++ \
-        libz-dev
-
-RUN git clone \
-    https://github.com/google/bloaty.git
-
+FROM gcr.io/oss-fuzz-base/base-builder@sha256:1b6a6993690fa947df74ceabbf6a1f89a46d7e4277492addcd45a8525e34be5a
+RUN apt-get update && apt-get upgrade -y && apt-get install -y cmake ninja-build g++
+RUN git clone --depth 1 https://github.com/google/bloaty.git bloaty
 WORKDIR bloaty
 COPY build.sh $SRC/

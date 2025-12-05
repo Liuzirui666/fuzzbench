@@ -14,35 +14,15 @@
 #
 ################################################################################
 
-FROM gcr.io/oss-fuzz-base/base-builder
-RUN apt-get update && apt-get install -y wget autoconf automake libtool pkg-config gperf python
-RUN pip3 install meson ninja gyp-next packaging
-
-RUN git clone --depth 1 https://github.com/madler/zlib.git
-RUN git clone --depth 1 https://gitlab.freedesktop.org/freetype/freetype.git
-RUN git clone --depth 1 https://github.com/mm2/Little-CMS.git
-RUN git clone --depth 1 https://github.com/uclouvain/openjpeg
-# Pin libpng to avoid a build failure:
-# configure: pkgconfig directory is ${libdir}/pkgconfig
-# ./configure: line 10024: syntax error near unexpected token `)'
-# ./configure: line 10024: `            riscv*)'
-RUN git clone https://github.com/glennrp/libpng.git && cd libpng && git checkout b4800bae3379f1abf82359703c28e727b5df4135
-RUN git clone --depth 1 https://gitlab.freedesktop.org/fontconfig/fontconfig.git
-RUN git clone --depth 1 https://gitlab.freedesktop.org/cairo/cairo.git
-RUN git clone --depth 1 --branch=5.15 git://code.qt.io/qt/qtbase.git
-# Pin libpango to avoid build failure:
-# Header for g_sort_array() was not included in gen_script_for_lang.c
-# https://gitlab.gnome.org/GNOME/pango/-/commits/main/tools/gen-script-for-lang.c?ref_type=heads
-RUN git clone https://gitlab.gnome.org/GNOME/pango.git && cd pango && git checkout d0cd499e17cdcfdc3f7a93d0d28a3df3c5f9b10e
-ADD https://ftp.gnome.org/pub/gnome/sources/glib/2.80/glib-2.80.0.tar.xz $SRC
-RUN tar xvJf $SRC/glib-2.80.0.tar.xz
-RUN wget https://archives.boost.io/release/1.87.0/source/boost_1_87_0.tar.bz2
-RUN wget https://ftp.mozilla.org/pub/security/nss/releases/NSS_3_99_RTM/src/nss-3.99-with-nspr-4.35.tar.gz
-RUN git clone --depth 1 --single-branch https://gitlab.freedesktop.org/poppler/poppler.git
-
+FROM gcr.io/oss-fuzz-base/base-builder@sha256:1b6a6993690fa947df74ceabbf6a1f89a46d7e4277492addcd45a8525e34be5a
+MAINTAINER jonathan@titanous.com
+RUN apt-get update && apt-get upgrade -y && apt-get install -y make autoconf libz-dev lib32z1-dev zlib1g-dev automake libtool pkg-config cmake
+RUN git clone --depth 1 https://anongit.freedesktop.org/git/poppler/poppler.git
+RUN git clone --depth 1 git://git.sv.nongnu.org/freetype/freetype2.git
 RUN git clone --depth 1 https://github.com/mozilla/pdf.js pdf.js && \
-    zip -q $SRC/poppler_seed_corpus.zip pdf.js/test/pdfs/*.pdf && \
+    zip -q $SRC/pdf_fuzzer_seed_corpus.zip pdf.js/test/pdfs/*.pdf && \
     rm -rf pdf.js
-ADD https://raw.githubusercontent.com/google/fuzzing/master/dictionaries/pdf.dict $SRC/poppler.dict
-WORKDIR $SRC/poppler
+ADD https://raw.githubusercontent.com/rc0r/afl-fuzz/master/dictionaries/pdf.dict $SRC/pdf_fuzzer.dict
+WORKDIR $SRC
+COPY *.cc poppler/fuzz/
 COPY build.sh $SRC/

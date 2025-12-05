@@ -104,7 +104,7 @@ def get_size_for_benchmark():
 
 def get_bcs_for_shared_libs(fuzz_target):
     """Get shared libs paths for the fuzz_target"""
-    ldd_cmd = ['/usr/bin/ldd', f'{fuzz_target}']
+    ldd_cmd = ['/usr/bin/ldd', '{target}'.format(target=fuzz_target)]
     output = ''
     try:
         output = subprocess.check_output(ldd_cmd, universal_newlines=True)
@@ -115,20 +115,23 @@ def get_bcs_for_shared_libs(fuzz_target):
         if '=>' not in line:
             continue
 
-        out_dir = f'{os.environ["OUT"]}/{LIB_BC_DIR}'
+        out_dir = '{out}/{lib_bc_dir}'.format(out=os.environ['OUT'],
+                                              lib_bc_dir=LIB_BC_DIR)
         path = pathlib.Path(out_dir)
         path.mkdir(exist_ok=True)
         so_path = line.split('=>')[1].split(' ')[1]
         so_name = so_path.split('/')[-1].split('.')[0]
         if so_name:
-            getbc_cmd = f'extract-bc -o {out_dir}/{so_name}.bc {so_path}'
-            print(f'[extract-bc command] | {getbc_cmd}')
+            getbc_cmd = 'extract-bc -o {out_dir}/{so_name}.bc {target}'.format(
+                target=so_path, out_dir=out_dir, so_name=so_name)
+            print('[extract-bc command] | {getbc_cmd}'.format(
+                getbc_cmd=getbc_cmd))
             # This will fail for most of the dependencies, which is fine. We
             # want to grab the .bc files for dependencies built in any given
             # benchmark's build.sh file.
             success = os.system(getbc_cmd)
             if success == 1:
-                print(f'Got a bc file for {so_path}')
+                print('Got a bc file for {target}'.format(target=so_path))
 
 
 def get_bc_files():
@@ -219,13 +222,13 @@ def emptydir(path):
 def run(command, hide_output=False, ulimit_cmd=None):
     """Run the command |command|, optionally, run |ulimit_cmd| first."""
     cmd = ' '.join(command)
-    print(f'[run_cmd] {cmd}')
+    print('[run_cmd] {}'.format(cmd))
 
     output_stream = subprocess.DEVNULL if hide_output else None
     if ulimit_cmd:
         ulimit_command = [ulimit_cmd + ';']
         ulimit_command.extend(command)
-        print(f'[ulimit_command] {" ".join(ulimit_command)}')
+        print('[ulimit_command] {}'.format(' '.join(ulimit_command)))
         ret = subprocess.call(' '.join(ulimit_command),
                               stdout=output_stream,
                               stderr=output_stream,
@@ -235,7 +238,8 @@ def run(command, hide_output=False, ulimit_cmd=None):
                               stdout=output_stream,
                               stderr=output_stream)
     if ret != 0:
-        raise ValueError(f'command failed: {ret} - {cmd}')
+        raise ValueError('command failed: {ret} - {cmd}'.format(ret=ret,
+                                                                cmd=cmd))
 
 
 def convert_seed_inputs(ktest_tool, input_klee, input_corpus):
@@ -264,21 +268,25 @@ def convert_seed_inputs(ktest_tool, input_klee, input_corpus):
         file_size = os.path.getsize(seedfile)
         benchmark_size = get_size_for_benchmark()
         if file_size > benchmark_size:
-            print(f'[run_fuzzer] Truncating {seedfile} ({file_size}) to '
-                  f'{benchmark_size}')
+            print('[run_fuzzer] Truncating {path} ({file_size}) to \
+                    {benchmark_size}'.format(path=seedfile,
+                                             file_size=file_size,
+                                             benchmark_size=benchmark_size))
             os.truncate(seedfile, benchmark_size)
 
-        seed_in = f'{seedfile}.ktest'
+        seed_in = '{seed}.ktest'.format(seed=seedfile)
         seed_out = os.path.join(input_klee, os.path.basename(seed_in))
 
         # Create file for symblic buffer
-        input_file = f'{seedfile}.ktest.{SYMBOLIC_BUFFER}'
-        output_kfile = f'{seedfile}.ktest'
+        input_file = '{seed}.ktest.{symbolic}'.format(seed=seedfile,
+                                                      symbolic=SYMBOLIC_BUFFER)
+        output_kfile = '{seed}.ktest'.format(seed=seedfile)
         shutil.copyfile(seedfile, input_file)
         os.rename(seedfile, input_file)
 
         # Create file for mode version
-        model_input_file = f'{seedfile}.ktest.{MODEL_VERSION}'
+        model_input_file = '{seed}.ktest.{symbolic}'.format(
+            seed=seedfile, symbolic=MODEL_VERSION)
         with open(model_input_file, 'wb') as mfile:
             mfile.write(model)
 
@@ -295,7 +303,8 @@ def convert_seed_inputs(ktest_tool, input_klee, input_corpus):
 
         n_converted += 1
 
-    print(f'[run_fuzzer] Converted {n_converted} seed files')
+    print('[run_fuzzer] Converted {converted} seed files'.format(
+        converted=n_converted))
 
     return n_converted
 
@@ -313,12 +322,12 @@ def convert_individual_ktest(ktest_tool, kfile, queue_dir, output_klee,
 
     # And copy the resulting file in output_corpus
     ktest_fn = os.path.splitext(kfile)[0]
-    file_in = f'{kfile}.{SYMBOLIC_BUFFER}'
+    file_in = '{file}.{symbuf}'.format(file=kfile, symbuf=SYMBOLIC_BUFFER)
     file_out = os.path.join(queue_dir, os.path.basename(ktest_fn))
     os.rename(file_in, file_out)
 
     # Check if this is a crash
-    crash_regex = os.path.join(output_klee, f'{ktest_fn}.*.err')
+    crash_regex = os.path.join(output_klee, '{fn}.*.err'.format(fn=ktest_fn))
     crashes = glob.glob(crash_regex)
     n_crashes = 0
     if len(crashes) == 1:
@@ -341,12 +350,14 @@ def monitor_resource_usage():
     start = datetime.now()
     while True:
         time.sleep(60 * 5)
-        message = (f'{psutil.cpu_times_percent(percpu=False)}\n'
-                   f'{psutil.virtual_memory()}\n'
-                   f'{psutil.swap_memory()}')
+        message = '{cputimes}\n{virtmem}\n{swap}'.format(
+            cputimes=psutil.cpu_times_percent(percpu=False),
+            virtmem=psutil.virtual_memory(),
+            swap=psutil.swap_memory())
         now = datetime.now()
         print(
-            f'[resource_thread] Resource usage after {now - start}:\n{message}')
+            '[resource_thread] Resource usage after {time}:\n{message}'.format(
+                time=now - start, message=message))
 
 
 # pylint: disable=import-error
@@ -385,7 +396,7 @@ def fuzz(input_corpus, output_corpus, target_binary):
     print('[run_fuzzer] Running target with klee')
 
     klee_bin = os.path.join(out_dir, 'bin/klee')
-    target_binary_bc = f'{target_binary}.bc'
+    target_binary_bc = '{}.bc'.format(target_binary)
     max_time_seconds = (
         int(os.getenv('MAX_TOTAL_TIME', str(MAX_TOTAL_TIME_DEFAULT))) * 4) // 5
 
@@ -394,7 +405,8 @@ def fuzz(input_corpus, output_corpus, target_binary):
 
     llvm_link_libs = []
     for filename in get_bc_files():
-        llvm_link_libs.append(f'-link-llvm-lib=./{LIB_BC_DIR}/{filename}')
+        llvm_link_libs.append('-link-llvm-lib=./{lib_bc}/{filename}'.format(
+            lib_bc=LIB_BC_DIR, filename=filename))
 
     max_memory_mb = str(int(psutil.virtual_memory().available // 10**6 * 0.9))
 

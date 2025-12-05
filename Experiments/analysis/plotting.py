@@ -13,13 +13,14 @@
 # limitations under the License.
 """Plotting functions."""
 
+import matplotlib.pyplot as plt
+import matplotlib.colors as colors
 import numpy as np
 import Orange
 import seaborn as sns
 
-from matplotlib import colors
-from matplotlib import pyplot as plt
 from analysis import data_utils
+from common import experiment_utils
 
 _DEFAULT_TICKS_COUNT = 12
 _DEFAULT_LABEL_ROTATION = 30
@@ -35,13 +36,11 @@ def _formatted_hour_min(seconds):
     hours = int(seconds / 60 / 60)
     minutes = int(seconds / 60) % 60
     if hours:
-        time_string += f'{hours}h'
+        time_string += '%dh' % hours
     if minutes:
         if hours:
             time_string += ':'
-        time_string += f'{minutes}m'
-    if seconds == 0:
-        time_string = '0m'
+        time_string += '%dm' % minutes
     return time_string
 
 
@@ -55,7 +54,7 @@ def _formatted_title(benchmark_snapshot_df):
     stats_string += _formatted_hour_min(snapshot_time)
 
     trial_count = benchmark_snapshot_df.fuzzer.value_counts().min()
-    stats_string += f', at least {trial_count} trials/fuzzer'
+    stats_string += ', %d trials/fuzzer' % trial_count
     stats_string += ')'
     return stats_string
 
@@ -91,7 +90,7 @@ class Plotter:
     # We specify 20 markers for the 20 colors above.
     _MARKER_PALETTE = [
         'o', 'v', '^', '<', '>', '8', 's', 'p', '*', 'h', 'H', 'D', 'd', 'P',
-        'X', ',', '.'
+        'X', ',', '+', 'x', '|', '_'
     ]
 
     def __init__(self, fuzzers, quick=False, logscale=False):
@@ -110,6 +109,7 @@ class Plotter:
         self._quick = quick
         self._logscale = logscale
 
+    # pylint: disable=no-self-use
     def _write_plot_to_image(self,
                              plot_function,
                              data,
@@ -126,7 +126,7 @@ class Plotter:
         fig, axes = plt.subplots(figsize=figsize)
         try:
             plot_function(data, axes=axes, **kwargs)
-            fig.savefig(image_path, bbox_inches='tight')
+            fig.savefig(image_path, bbox_inches="tight")
         finally:
             plt.close(fig)
 
@@ -181,28 +181,25 @@ class Plotter:
                     loc='upper left',
                     frameon=False)
 
-        axes.set(ylabel='Bug coverage' if bugs else 'Code branch coverage')
+        axes.set(ylabel='Bug coverage' if bugs else 'Code region coverage')
         axes.set(xlabel='Time (hour:minute)')
 
         if self._logscale or logscale:
-            axes.set_xscale('symlog')
+            axes.set_xscale('log')
             ticks = np.logspace(
                 # Start from the time of the first measurement.
-                0.0,
+                np.log10(experiment_utils.DEFAULT_SNAPSHOT_SECONDS),
                 np.log10(snapshot_time + 1),  # Include tick at end time.
-                _DEFAULT_TICKS_COUNT - 1)
-            ticks = np.insert(ticks, 0, 0)
-            axes.set_xticks([], minor=True)
+                _DEFAULT_TICKS_COUNT)
         else:
             ticks = np.arange(
-                0.0,
+                experiment_utils.DEFAULT_SNAPSHOT_SECONDS,
                 snapshot_time + 1,  # Include tick at end time.
-                max(snapshot_time / _DEFAULT_TICKS_COUNT, 1))
+                snapshot_time / _DEFAULT_TICKS_COUNT)
 
         axes.set_xticks(ticks)
         axes.set_xticklabels([_formatted_hour_min(t) for t in ticks])
 
-        plt.xlim(0)
         sns.despine(ax=axes, trim=True)
 
     def write_coverage_growth_plot(  # pylint: disable=too-many-arguments
@@ -260,10 +257,10 @@ class Plotter:
                         showmeans=True,
                         meanprops=mean_props)
 
-            sns.stripplot(**common_args, size=3, color='black', alpha=0.6)
+            sns.stripplot(**common_args, size=3, color="black", alpha=0.6)
 
         axes.set_title(_formatted_title(benchmark_snapshot_df))
-        ylabel = f'Reached {"bug" if bugs else "branch"} coverage'
+        ylabel = 'Reached {} coverage'.format('bug' if bugs else 'region')
         axes.set(ylabel=ylabel)
         axes.set(xlabel='Fuzzer (highest median coverage on the left)')
         axes.set_xticklabels(axes.get_xticklabels(),
@@ -310,7 +307,7 @@ class Plotter:
         axes.set_title(_formatted_title(benchmark_snapshot_df))
         axes.legend(loc='upper right', frameon=False)
 
-        axes.set(xlabel='Bug coverage' if bugs else 'Code branch coverage')
+        axes.set(xlabel='Bug coverage' if bugs else 'Code region coverage')
         axes.set(ylabel='Density')
         axes.set_xticklabels(axes.get_xticklabels(),
                              rotation=_DEFAULT_LABEL_ROTATION,
@@ -342,7 +339,7 @@ class Plotter:
                            ax=axes)
 
         axes.set_title(_formatted_title(benchmark_snapshot_df))
-        ylabel = f'Reached {"bug" if bugs else "branch"} coverage'
+        ylabel = 'Reached {} coverage'.format('bug' if bugs else 'region')
         axes.set(ylabel=ylabel)
         axes.set(xlabel='Fuzzer (highest median coverage on the left)')
         axes.set_xticklabels(axes.get_xticklabels(),
@@ -390,8 +387,8 @@ class Plotter:
             args['annot'] = False
 
         axis = sns.heatmap(values, ax=axes, **args)
-        axis.set_ylabel('')
-        axis.set_xlabel('')
+        axis.set_ylabel("")
+        axis.set_xlabel("")
         label_args = {'rotation': 0, 'horizontalalignment': 'right'}
         axis.set_yticklabels(axis.get_yticklabels(), **label_args)
         label_args = {'rotation': 270, 'horizontalalignment': 'right'}
@@ -427,7 +424,7 @@ class Plotter:
         heatmap_args = {
             'cmap': cmap,
             'mask': mask if symmetric else None,
-            'fmt': '.3f',
+            'fmt': ".3f",
             'norm': norm
         }
 
@@ -467,7 +464,7 @@ class Plotter:
             'vmax': 1.0,
             'square': True,
             'annot': True,
-            'fmt': '.2f'
+            'fmt': ".2f"
         }
         return self._generic_heatmap_plot(a12_values,
                                           axes,
@@ -489,22 +486,22 @@ class Plotter:
                                       critical_difference)
         fig = plt.gcf()
         try:
-            fig.savefig(image_path, bbox_inches='tight')
+            fig.savefig(image_path, bbox_inches="tight")
         finally:
             plt.close(fig)
 
     def unique_coverage_ranking_plot(self,
-                                     unique_branch_cov_df_combined,
+                                     unique_region_cov_df_combined,
                                      axes=None):
         """Draws unique_coverage_ranking plot. The fuzzer labels will be in
         the order of their coverage."""
 
-        fuzzer_order = unique_branch_cov_df_combined.sort_values(
-            by='unique_branches_covered', ascending=False).fuzzer
+        fuzzer_order = unique_region_cov_df_combined.sort_values(
+            by='unique_regions_covered', ascending=False).fuzzer
 
-        axes = sns.barplot(y='unique_branches_covered',
+        axes = sns.barplot(y='unique_regions_covered',
                            x='fuzzer',
-                           data=unique_branch_cov_df_combined,
+                           data=unique_region_cov_df_combined,
                            order=fuzzer_order,
                            palette=self._fuzzer_colors,
                            ax=axes)
@@ -520,7 +517,7 @@ class Plotter:
 
         sns.barplot(y='aggregated_edges_covered',
                     x='fuzzer',
-                    data=unique_branch_cov_df_combined,
+                    data=unique_region_cov_df_combined,
                     order=fuzzer_order,
                     facecolor=(1, 1, 1, 0),
                     edgecolor='0.2',
@@ -534,11 +531,11 @@ class Plotter:
 
         sns.despine(ax=axes, trim=True)
 
-    def write_unique_coverage_ranking_plot(self, unique_branch_cov_df_combined,
+    def write_unique_coverage_ranking_plot(self, unique_region_cov_df_combined,
                                            image_path):
         """Writes ranking plot for unique coverage."""
         self._write_plot_to_image(self.unique_coverage_ranking_plot,
-                                  unique_branch_cov_df_combined,
+                                  unique_region_cov_df_combined,
                                   image_path,
                                   wide=True)
 

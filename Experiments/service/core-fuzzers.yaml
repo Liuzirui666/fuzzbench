@@ -5,12 +5,10 @@ fuzzers:
     - aflfast
     - aflplusplus
     - aflsmart
-    - centipede
+    - entropic
     - eclipser
     - fairfuzz
     - honggfuzz
-    - libafl
+    - lafintel
     - libfuzzer
     - mopt
-    # - klee               # To be supported later.
-    # - symcc_aflplusplus  # To be supported later.

@@ -16,7 +16,7 @@
 import enum
 import posixpath
 import subprocess
-from typing import List, Optional
+from typing import List
 
 from common import experiment_utils
 from common import logs
@@ -47,7 +47,7 @@ class InstanceType(enum.Enum):
 def create_instance(instance_name: str,
                     instance_type: InstanceType,
                     config: dict,
-                    startup_script: Optional[str] = None,
+                    startup_script: str = None,
                     preemptible: bool = False,
                     **kwargs) -> bool:
     """Creates a GCE instance with name, |instance_name|, type, |instance_type|
@@ -64,36 +64,36 @@ def create_instance(instance_name: str,
         instance_name,
         '--image-family=cos-stable',
         '--image-project=cos-cloud',
-        f'--zone={config["cloud_compute_zone"]}',
+        '--zone=%s' % config['cloud_compute_zone'],
         '--scopes=cloud-platform',
     ]
     if instance_type == InstanceType.DISPATCHER:
         command.extend([
-            f'--machine-type={DISPATCHER_MACHINE_TYPE}',
-            f'--boot-disk-size={DISPATCHER_BOOT_DISK_SIZE}',
-            f'--boot-disk-type={DISPATCHER_BOOT_DISK_TYPE}',
+            '--machine-type=%s' % DISPATCHER_MACHINE_TYPE,
+            '--boot-disk-size=%s' % DISPATCHER_BOOT_DISK_SIZE,
+            '--boot-disk-type=%s' % DISPATCHER_BOOT_DISK_TYPE,
         ])
     else:
         machine_type = config['runner_machine_type']
         if machine_type is not None:
-            command.append(f'--machine-type={machine_type}')
+            command.append('--machine-type=%s' % machine_type)
         else:
             # Do this to support KLEE experiments.
             command.append([
-                f'--custom-memory={config["runner_memory"]}',
-                f'--custom-cpu={config["runner_num_cpu_cores"]}',
+                '--custom-memory=%s' % config['runner_memory'],
+                '--custom-cpu=%s' % config['runner_num_cpu_cores']
             ])
 
         command.extend([
             '--no-address',
-            f'--boot-disk-size={RUNNER_BOOT_DISK_SIZE}',
+            '--boot-disk-size=%s' % RUNNER_BOOT_DISK_SIZE,
         ])
 
     if preemptible:
         command.append('--preemptible')
     if startup_script:
         command.extend(
-            ['--metadata-from-file', f'startup-script={startup_script}'])
+            ['--metadata-from-file', 'startup-script=' + startup_script])
 
     result = new_process.execute(command, expect_zero=False, **kwargs)
     if result.retcode == 0:
@@ -126,13 +126,12 @@ def set_default_project(cloud_project: str):
         ['gcloud', 'config', 'set', 'project', cloud_project])
 
 
-def run_local_instance(startup_script: Optional[str] = None) -> bool:
+def run_local_instance(startup_script: str = None) -> bool:
     """Does the equivalent of "create_instance" for local experiments, runs
     |startup_script| in the background."""
     command = ['/bin/bash', startup_script]
-    # pylint: disable=consider-using-with
     subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    return True
+    return new_process.ProcessResult(0, '', False)
 
 
 def create_instance_template(template_name, docker_image, env, project, zone):
@@ -145,13 +144,13 @@ def create_instance_template(template_name, docker_image, env, project, zone):
         'gcloud', 'compute', '--project', project, 'instance-templates',
         'create-with-container', template_name, '--no-address',
         '--image-family=cos-stable', '--image-project=cos-cloud',
-        f'--region={zone}', '--scopes=cloud-platform',
-        f'--machine-type={MEASURER_WORKER_MACHINE_TYPE}',
-        f'--boot-disk-size={MEASURER_WORKER_BOOT_DISK_SIZE}', '--preemptible',
+        '--region=%s' % zone, '--scopes=cloud-platform',
+        '--machine-type=%s' % MEASURER_WORKER_MACHINE_TYPE,
+        '--boot-disk-size=%s' % MEASURER_WORKER_BOOT_DISK_SIZE, '--preemptible',
         '--container-image', docker_image
     ]
     for item in env.items():
-        command.extend(['--container-env', f'{item[0]}={item[1]}'])
+        command.extend(['--container-env', '%s=%s' % item])
     new_process.execute(command)
     return posixpath.join('https://www.googleapis.com/compute/v1/projects/',
                           project, 'global', 'instanceTemplates', template_name)

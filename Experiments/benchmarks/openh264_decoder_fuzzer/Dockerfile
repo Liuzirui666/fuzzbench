@@ -14,13 +14,11 @@
 #
 ################################################################################
 
-FROM gcr.io/oss-fuzz-base/base-builder
-RUN apt-get update && \
-    apt-get install -y ffmpeg libstdc++-9-dev libstdc++-9-dev:i386 nasm subversion
+FROM gcr.io/oss-fuzz-base/base-builder@sha256:1b6a6993690fa947df74ceabbf6a1f89a46d7e4277492addcd45a8525e34be5a
+MAINTAINER twsmith@mozilla.com
+RUN dpkg --add-architecture i386 && \
+    apt-get update && \
+    apt-get install -y libstdc++-5-dev libstdc++-5-dev:i386 nasm subversion
 RUN git clone --depth 1 https://github.com/cisco/openh264.git openh264
-RUN python3 -m pip install --upgrade pip && python3 -m pip install corpus-replicator
-RUN corpus-replicator -o corpus video_h264_264_libx264.yml video
-RUN mv openh264/res/*.264 corpus/
-RUN zip -j0r decoder_fuzzer_seed_corpus.zip corpus/
 WORKDIR openh264
 COPY build.sh decoder_fuzzer.cpp $SRC/
