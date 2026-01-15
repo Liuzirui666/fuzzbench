@@ -48,3 +48,17 @@ venv.bak/
 
 # Logs
 *.log
+.DS_Store
+__pycache__/
+*.pyc
+*.log
+tmp/
+temp/
+build/
+dist/
+out/
+**/corpus/
+**/queue/
+**/crashes/
+**/hangs/
+**/coverage/
