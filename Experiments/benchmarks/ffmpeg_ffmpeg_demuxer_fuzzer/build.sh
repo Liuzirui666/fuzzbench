@@ -26,22 +26,12 @@ mkdir -p $FFMPEG_DEPS_PATH
 export PATH="$FFMPEG_DEPS_PATH/bin:$PATH"
 export LD_LIBRARY_PATH="$FFMPEG_DEPS_PATH/lib"
 
-cd $SRC
-bzip2 -f -d alsa-lib-*
-tar xf alsa-lib-*
-cd alsa-lib-*
-./configure --prefix="$FFMPEG_DEPS_PATH" --enable-static --disable-shared
-make clean
-make -j$(nproc) all
-make install
+# newly added to fix pkg-config issues
+# Make pkg-config always see our locally-installed deps.
+export PKG_CONFIG_PATH="${FFMPEG_DEPS_PATH}/lib/pkgconfig:${FFMPEG_DEPS_PATH}/lib64/pkgconfig:${FFMPEG_DEPS_PATH}/share/pkgconfig"
 
-cd $SRC/drm
-# Requires xutils-dev libpciaccess-dev
-./autogen.sh
-./configure --prefix="$FFMPEG_DEPS_PATH" --enable-static
-make clean
-make -j$(nproc)
-make install
+
+cd $SRC
 
 cd $SRC/fdk-aac
 autoreconf -fiv
@@ -59,33 +49,6 @@ make clean
 make -j$(nproc)
 make install
 
-cd $SRC/libXext
-./autogen.sh
-./configure --prefix="$FFMPEG_DEPS_PATH" --enable-static
-make clean
-make -j$(nproc)
-make install
-
-cd $SRC/libXfixes
-./autogen.sh
-./configure --prefix="$FFMPEG_DEPS_PATH" --enable-static
-make clean
-make -j$(nproc)
-make install
-
-cd $SRC/libva
-./autogen.sh
-./configure --prefix="$FFMPEG_DEPS_PATH" --enable-static --disable-shared
-make clean
-make -j$(nproc) all
-make install
-
-cd $SRC/libvdpau
-./autogen.sh
-./configure --prefix="$FFMPEG_DEPS_PATH" --enable-static --disable-shared
-make clean
-make -j$(nproc) all
-make install
 
 cd $SRC/libvpx
 LDFLAGS="$CXXFLAGS" ./configure --prefix="$FFMPEG_DEPS_PATH" \
@@ -136,23 +99,59 @@ make clean
 make -j$(nproc)
 make install
 
-cd $SRC/x265/build/linux
-cmake -G "Unix Makefiles" \
-    -DCMAKE_C_COMPILER=$CC -DCMAKE_CXX_COMPILER=$CXX \
-    -DCMAKE_C_FLAGS="$CFLAGS" -DCMAKE_CXX_FLAGS="$CXXFLAGS" \
-    -DCMAKE_INSTALL_PREFIX="$FFMPEG_DEPS_PATH" -DENABLE_SHARED:bool=off \
-    ../../source
-make clean
-make -j$(nproc) x265-static
-make install
+# cd $SRC/x265/build/linux
+# # cmake -G "Unix Makefiles" \
+# #     -DCMAKE_C_COMPILER=$CC -DCMAKE_CXX_COMPILER=$CXX \
+# #     -DCMAKE_C_FLAGS="$CFLAGS" -DCMAKE_CXX_FLAGS="$CXXFLAGS" \
+# #     -DCMAKE_INSTALL_PREFIX="$FFMPEG_DEPS_PATH" -DENABLE_SHARED:bool=off \
+# #     ../../source
+
+# rm -rf CMakeCache.txt CMakeFiles
+
+# cmake -G "Unix Makefiles" \
+#   -DCMAKE_C_COMPILER="${CC}" \
+#   -DCMAKE_CXX_COMPILER="${CXX}" \
+#   -DCMAKE_C_FLAGS="${CFLAGS}" \
+#   -DCMAKE_CXX_FLAGS="${CXXFLAGS}" \
+#   -DCMAKE_INSTALL_PREFIX="${FFMPEG_DEPS_PATH}" \
+#   -DENABLE_SHARED=OFF \
+#   -DENABLE_PIC=ON \
+#   ../../source
+
+# make clean
+# make -j$(nproc) x265-static
+# make install
+
+# # newly added:Create a minimal x265.pc file for ffmpeg's pkg-config dependency check.
+# mkdir -p "${FFMPEG_DEPS_PATH}/lib/pkgconfig" "${FFMPEG_DEPS_PATH}/share/pkgconfig"
+
+# cat > "${FFMPEG_DEPS_PATH}/lib/pkgconfig/x265.pc" <<EOF
+# prefix=${FFMPEG_DEPS_PATH}
+# exec_prefix=\${prefix}
+# libdir=\${exec_prefix}/lib
+# includedir=\${prefix}/include
+
+# Name: x265
+# Description: H.265/HEVC encoder library
+# Version: 0
+# Libs: -L\${libdir} -lx265
+# Libs.private: -ldl -lpthread -lm
+# Cflags: -I\${includedir}
+# EOF
+
+# cp "${FFMPEG_DEPS_PATH}/lib/pkgconfig/x265.pc" "${FFMPEG_DEPS_PATH}/share/pkgconfig/x265.pc"
+
+
 
 # Remove shared libraries to avoid accidental linking against them.
+
 rm $FFMPEG_DEPS_PATH/lib/*.so
 rm $FFMPEG_DEPS_PATH/lib/*.so.*
 
 # Build ffmpeg.
 cd $SRC/ffmpeg
-PKG_CONFIG_PATH="$FFMPEG_DEPS_PATH/lib/pkgconfig" ./configure \
+# PKG_CONFIG_PATH="$FFMPEG_DEPS_PATH/lib/pkgconfig" ./configure \
+./configure \
     --cc=$CC --cxx=$CXX --ld="$CXX $CXXFLAGS -std=c++11" \
     --extra-cflags="-I$FFMPEG_DEPS_PATH/include" \
     --extra-ldflags="-L$FFMPEG_DEPS_PATH/lib" \
@@ -171,9 +170,13 @@ PKG_CONFIG_PATH="$FFMPEG_DEPS_PATH/lib/pkgconfig" ./configure \
     --enable-libvorbis \
     --enable-libvpx \
     --enable-libx264 \
-    --enable-libx265 \
     --enable-nonfree \
-    --disable-shared
+    --disable-shared \
+    --disable-vdpau \
+    --disable-xlib \
+    --disable-libxcb \
+    --disable-vaapi \
+ 
 make clean
 make -j$(nproc) install
 
@@ -185,20 +188,12 @@ make -j$(nproc) install
 # export TEST_SAMPLES_PATH=$SRC/ffmpeg/fate-suite/
 # make fate-rsync SAMPLES=$TEST_SAMPLES_PATH
 
-# Build the fuzzers.
-cd $SRC/ffmpeg
-
-FUZZ_TARGET_SOURCE=$SRC/ffmpeg/tools/target_dec_fuzzer.c
-
-export TEMP_VAR_CODEC="AV_CODEC_ID_H264"
-export TEMP_VAR_CODEC_TYPE="VIDEO"
-
-
-# Build fuzzer for demuxer
-fuzzer_name=ffmpeg_DEMUXER_fuzzer
-echo -en "[libfuzzer]\nmax_len = 1000000\n" > $OUT/${fuzzer_name}.options
+# Build ONLY the demuxer fuzzer.
+cd "${SRC}/ffmpeg"
+fuzzer_name="ffmpeg_DEMUXER_fuzzer"
+echo -en "[libfuzzer]\nmax_len = 1000000\n" > "${OUT}/${fuzzer_name}.options"
 make tools/target_dem_fuzzer
-mv tools/target_dem_fuzzer $OUT/${fuzzer_name}
+mv tools/target_dem_fuzzer "${OUT}/${fuzzer_name}"
 
 # Find relevant corpus in test samples and archive them for every fuzzer.
 #cd $SRC

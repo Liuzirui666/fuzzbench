@@ -15,9 +15,19 @@
 #
 ################################################################################
 
-# prepare corpus
-svn export https://github.com/mozillasecurity/fuzzdata.git/trunk/samples/h264 corpus/
-mv ./res/*.264 ./corpus/
+# [FIX] Robustness Upgrade:
+# The external repository 'mozillasecurity/fuzzdata' is unstable/unreachable, causing build failures.
+# We remove the dependency on external git/svn downloads entirely.
+# Instead, we rely solely on the seed files (res/*.264) provided by the openh264 project itself.
+
+# 1. Create the corpus directory manually (since svn export won't create it for us)
+mkdir -p corpus
+
+# 2. Copy the project's own test files into the corpus directory
+# The 'res' folder is part of the openh264 source code we already cloned.
+cp ./res/*.264 ./corpus/
+
+# 3. Package the seeds
 zip -j0r ${OUT}/decoder_fuzzer_seed_corpus.zip ./corpus/
 
 # build 

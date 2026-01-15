@@ -14,14 +14,26 @@
 #
 ################################################################################
 
-FROM gcr.io/oss-fuzz-base/base-builder@sha256:1b6a6993690fa947df74ceabbf6a1f89a46d7e4277492addcd45a8525e34be5a
+# FROM gcr.io/oss-fuzz-base/base-builder
+FROM gcr.io/oss-fuzz-base/base-builder@sha256:87ca1e9e19235e731fac8de8d1892ebe8d55caf18e7aa131346fc582a2034fdd
 
-# Upgrade to avoid certs errors
-RUN apt-get update && apt-get upgrade -y && \
-    apt-get install -y make autoconf automake libtool pkg-config python-dev python3-dev
 
+# MAINTAINER ochang@chromium.org
+# RUN apt-get update && apt-get install -y make autoconf automake libtool pkg-config
+
+# RUN git clone --depth 1 https://gitlab.gnome.org/GNOME/libxml2.git
+# WORKDIR libxml2
+
+# COPY build.sh $SRC/
+# COPY *.cc *.h *.options *.dict $SRC/
+
+# [FIX] Install zlib and lzma development libraries to ensure headers and libs are present
+RUN apt-get update && apt-get install -y make autoconf automake libtool pkg-config zlib1g-dev liblzma-dev
+
+# [FIX] Clone the repo and checkout the specific commit to ensure reproducibility
 RUN git clone https://gitlab.gnome.org/GNOME/libxml2.git
 WORKDIR libxml2
+RUN git checkout 99a864a1f7a9cb59865f803770d7d62fb47cad69
 
 COPY build.sh $SRC/
-COPY *.cc *.h *.dict $SRC/
+COPY *.cc *.h *.options *.dict $SRC/
