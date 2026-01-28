@@ -585,13 +585,26 @@ def schedule_loop(experiment_config: dict):
         if local_experiment:
             runner_num_cpu_cores = experiment_config['runner_num_cpu_cores']
             processes = runners_cpus // runner_num_cpu_cores
-            logger.info('Scheduling runners from core 0 to %d.',
-                        runner_num_cpu_cores * processes - 1)
+            # logger.info('Scheduling runners from core 0 to %d.',
+            #             runner_num_cpu_cores * processes - 1)
+            cpu_offset = int(experiment_config.get('cpu_offset') or 0)
+            effective_runner_cores = runner_num_cpu_cores * processes
+            end_core = cpu_offset + effective_runner_cores - 1
+            ncpus = os.cpu_count() or 1
+            if end_core >= ncpus:
+                raise ValueError(
+                    f'cpu_offset block exceeds host CPUs: '
+                    f'offset={cpu_offset}, runners_effective={effective_runner_cores}, '
+                    f'end_core={end_core}, ncpus={ncpus}')
+            logger.info('Scheduling runners from core %d to %d.', cpu_offset, end_core)
+            
             core_allocation = {}
-            for cpu in range(0, runner_num_cpu_cores * processes,
+            # for cpu in range(0, runner_num_cpu_cores * processes,
+            for cpu in range(cpu_offset, cpu_offset + effective_runner_cores,
                              runner_num_cpu_cores):
-                core_allocation[
-                    f'{cpu}-{cpu + runner_num_cpu_cores - 1}'] = None
+                # core_allocation[
+                #     f'{cpu}-{cpu + runner_num_cpu_cores - 1}'] = None
+                core_allocation[f'{cpu}-{cpu + runner_num_cpu_cores - 1}'] = None
             pool_args = (processes,)
         else:
             pool_args = (runners_cpus,)

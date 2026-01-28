@@ -60,10 +60,6 @@ SNAPSHOT_QUEUE_GET_TIMEOUT = 1
 SNAPSHOTS_BATCH_SAVE_SIZE = 100
 MEASUREMENT_LOOP_WAIT = 10
 
-# Hard cap for measurer workers when measurers_cpus is not provided.
-# Tune this number as you like (e.g., 8/10/12/16).
-DEFAULT_MEASURERS_CPUS_WHEN_UNSET = 5
-
 
 def exists_in_experiment_filestore(path: pathlib.Path) -> bool:
     """Returns True if |path| exists in the experiment_filestore."""
@@ -77,12 +73,13 @@ def measure_main(experiment_config):
     logger.info('Start measuring.')
 
     # Start the measure loop first.
-    experiment = experiment_config['experiment']
-    max_total_time = experiment_config['max_total_time']
-    measurers_cpus = experiment_config['measurers_cpus']
+    # experiment = experiment_config['experiment']
+    # max_total_time = experiment_config['max_total_time']
+    # measurers_cpus = experiment_config['measurers_cpus']
     region_coverage = experiment_config['region_coverage']
-    measure_manager_loop(experiment, max_total_time, measurers_cpus,
-                         region_coverage)
+    # measure_manager_loop(experiment, max_total_time, measurers_cpus,
+    #                      region_coverage)
+    measure_manager_loop(experiment_config, region_coverage)
 
     # Clean up resources.
     gc.collect()
@@ -100,19 +97,24 @@ def _process_init(cores_queue):
         psutil.Process().cpu_affinity([cpu])
 
 
+# def measure_loop(experiment: str,
+#                  max_total_time: int,
+#                  measurers_cpus=None,
+#                  runners_cpus=None,
+#                  region_coverage=False):
 def measure_loop(experiment: str,
                  max_total_time: int,
                  measurers_cpus=None,
                  runners_cpus=None,
-                 region_coverage=False):
+                 region_coverage=False,
+                 cpu_offset: int = 0,
+                 runner_num_cpu_cores: int = 1):
     """Continuously measure trials for |experiment|."""
     logger.info('Start measure_loop.')
 
     # pool_args = get_pool_args(measurers_cpus, runners_cpus)
-    
-    if not measurers_cpus:
-        measurers_cpus = min(DEFAULT_MEASURERS_CPUS_WHEN_UNSET, multiprocessing.cpu_count())
-    pool_args = get_pool_args(measurers_cpus, runners_cpus)
+    pool_args = get_pool_args(measurers_cpus, runners_cpus, cpu_offset, runner_num_cpu_cores)
+
 
     with multiprocessing.Pool(
             *pool_args) as pool, multiprocessing.Manager() as manager:
@@ -742,10 +744,8 @@ def measure_manager_inner_loop(experiment: str, max_cycle: int, request_queue,
     logger.info('Retrieved %d unmeasured snapshots from measure manager',
                 len(unmeasured_snapshots))
     # When there are no more snapshots left to be measured, should break loop.
-    # Comment: WHY???
     if not unmeasured_snapshots:
-        # return False
-        return
+        return False
 
     # Write measurements requests to request queue
     for unmeasured_snapshot in unmeasured_snapshots:
@@ -769,52 +769,100 @@ def measure_manager_inner_loop(experiment: str, max_cycle: int, request_queue,
     if measured_snapshots:
         db_utils.add_all(measured_snapshots)
 
-    # return True
+    return True
 
 
-def get_pool_args(measurers_cpus, runners_cpus):
-    """Return pool args based on measurer cpus and runner cpus arguments."""
+# def get_pool_args(measurers_cpus, runners_cpus):
+#     """Return pool args based on measurer cpus and runner cpus arguments."""
+def get_pool_args(measurers_cpus, runners_cpus, cpu_offset=0, runner_num_cpu_cores=1):
+    """Return pool args based on measurer/runner CPUs and cpu_offset.
+
+    For local experiments, measurer workers are pinned to:
+      [cpu_offset + effective_runner_cores, ...]
+    where effective_runner_cores = floor(runners_cpus / runner_num_cpu_cores) * runner_num_cpu_cores.
+    """
     if measurers_cpus is None or runners_cpus is None:
         return ()
 
     local_experiment = experiment_utils.is_local_experiment()
     if not local_experiment:
         return (measurers_cpus,)
+    
+    processes = runners_cpus // runner_num_cpu_cores
+    effective_runner_cores = processes * runner_num_cpu_cores
+    meas_start = int(cpu_offset) + int(effective_runner_cores)
 
     cores_queue = multiprocessing.Queue()
-    logger.info('Scheduling measurers from core %d to %d.', runners_cpus,
-                runners_cpus + measurers_cpus - 1)
-    for cpu in range(runners_cpus, runners_cpus + measurers_cpus):
+    # logger.info('Scheduling measurers from core %d to %d.', runners_cpus,
+    #             runners_cpus + measurers_cpus - 1)
+    # for cpu in range(runners_cpus, runners_cpus + measurers_cpus):
+    logger.info('Scheduling measurers from core %d to %d.', meas_start,
+                meas_start + measurers_cpus - 1)
+    for cpu in range(meas_start, meas_start + measurers_cpus):    
         cores_queue.put(cpu)
     return (measurers_cpus, _process_init, (cores_queue,))
 
 
-def measure_manager_loop(experiment: str,
-                         max_total_time: int,
-                         measurers_cpus=None,
+# def measure_manager_loop(experiment: str,
+#                          max_total_time: int,
+#                          measurers_cpus=None,
+#                          region_coverage=False):  # pylint: disable=too-many-locals
+#     """Measure manager loop. Creates request and response queues, request
+#     measurements tasks from workers, retrieve measurement results from response
+#     queue and writes measured snapshots in database."""
+#     logger.info('Starting measure manager loop.')
+#     if not measurers_cpus:
+#         measurers_cpus = multiprocessing.cpu_count()
+#         logger.info('Number of measurer CPUs not passed as argument. using %d',
+#                     measurers_cpus)
+#     with multiprocessing.Pool() as pool, multiprocessing.Manager() as manager:
+#         logger.info('Setting up coverage binaries')
+#         set_up_coverage_binaries(pool, experiment)
+#         request_queue = manager.Queue()
+#         response_queue = manager.Queue()
+def measure_manager_loop(experiment_config: dict,
                          region_coverage=False):  # pylint: disable=too-many-locals
-    """Measure manager loop. Creates request and response queues, request
-    measurements tasks from workers, retrieve measurement results from response
-    queue and writes measured snapshots in database."""
-    logger.info('Starting measure manager loop.')
-    # if not measurers_cpus:
-    #     measurers_cpus = multiprocessing.cpu_count()
-    #     logger.info('Number of measurer CPUs not passed as argument. using %d',
-    #                 measurers_cpus)
-    # with multiprocessing.Pool() as pool, multiprocessing.Manager() as manager:
-    if not measurers_cpus:
-        measurers_cpus = min(DEFAULT_MEASURERS_CPUS_WHEN_UNSET,
-                            multiprocessing.cpu_count())
-        logger.info(
-            'Number of measurer CPUs not passed as argument. using %d (capped)',
-            measurers_cpus)
+    """Measure manager loop.
 
-    with multiprocessing.Pool(processes=measurers_cpus) as pool, multiprocessing.Manager() as manager:
+    Creates request/response queues, starts measurer workers, consumes
+    results, and writes measured snapshots in database.
+
+    In local experiments, pins measurer workers to a CPU block that starts
+    after the runner block determined by cpu_offset and runners_cpus.
+    """
+    logger.info('Starting measure manager loop.')
+    experiment = experiment_config['experiment']
+    max_total_time = experiment_config['max_total_time']
+    measurers_cpus = experiment_config.get('measurers_cpus')
+    if not measurers_cpus:
+        measurers_cpus = multiprocessing.cpu_count()
+        logger.info('Number of measurer CPUs not passed as argument. using %d',
+                    measurers_cpus)
+
+    runners_cpus = experiment_config.get('runners_cpus')
+    cpu_offset = int(experiment_config.get('cpu_offset') or 0)
+    runner_num_cpu_cores = int(experiment_config.get('runner_num_cpu_cores') or 1)
+
+    pool_args = get_pool_args(measurers_cpus, runners_cpus, cpu_offset, runner_num_cpu_cores)
+
+    # Safety check for local pinning bounds (best-effort).
+    if experiment_utils.is_local_experiment() and runners_cpus is not None:
+        ncpus = os.cpu_count() or 1
+        processes = runners_cpus // runner_num_cpu_cores
+        effective_runner_cores = processes * runner_num_cpu_cores
+        meas_end = cpu_offset + effective_runner_cores + int(measurers_cpus) - 1
+        if meas_end >= ncpus:
+            raise ValueError(
+                f'measurer cpu block exceeds host CPUs: offset={cpu_offset}, '
+                f'runners_effective={effective_runner_cores}, measurers={measurers_cpus}, '
+                f'end_core={meas_end}, ncpus={ncpus}')
+
+    with multiprocessing.Pool(*pool_args) as pool, multiprocessing.Manager() as manager:
         logger.info('Setting up coverage binaries')
         set_up_coverage_binaries(pool, experiment)
         request_queue = manager.Queue()
         response_queue = manager.Queue()
-
+        
         config = {
             'request_queue': request_queue,
             'response_queue': response_queue,
@@ -822,24 +870,26 @@ def measure_manager_loop(experiment: str,
         }
         local_measure_worker = measure_worker.LocalMeasureWorker(config)
 
-        # Since each worker is going to be in an infinite loop, we dont need
-        # result return. Workers' life scope will end automatically when there
-        # are no more snapshots left to measure.
-        logger.info('Starting measure worker loop for %d workers',
-                    measurers_cpus)
-        for _ in range(measurers_cpus):
-            _result = pool.apply_async(local_measure_worker.measure_worker_loop)
+        # # Since each worker is going to be in an infinite loop, we dont need
+        # # result return. Workers' life scope will end automatically when there
+        # # are no more snapshots left to measure.
+        # logger.info('Starting measure worker loop for %d workers',
+        #             measurers_cpus)
+        # for _ in range(measurers_cpus):
+        #     _result = pool.apply_async(local_measure_worker.measure_worker_loop)
 
+        logger.info('Starting measure worker loop for %d workers', measurers_cpus)
+        for _ in range(int(measurers_cpus)):
+            pool.apply_async(local_measure_worker.measure_worker_loop)
+        
         max_cycle = _time_to_cycle(max_total_time)
         queued_snapshots = set()
         while not scheduler.all_trials_ended(experiment):
-            # continue_inner_loop = measure_manager_inner_loop(
-            #     experiment, max_cycle, request_queue, response_queue,
-            #     queued_snapshots)
-            # if not continue_inner_loop:
-            #     break
-            measure_manager_inner_loop(experiment, max_cycle, request_queue,
-                                       response_queue, queued_snapshots)
+            continue_inner_loop = measure_manager_inner_loop(
+                experiment, max_cycle, request_queue, response_queue,
+                queued_snapshots)
+            if not continue_inner_loop:
+                break
             time.sleep(MEASUREMENT_LOOP_WAIT)
         logger.info('All trials ended. Ending measure manager loop')
 
@@ -850,9 +900,19 @@ def main():
     multiprocessing.set_start_method('spawn')
 
     experiment_name = experiment_utils.get_experiment_name()
+    
+    cpu_offset = int(os.environ.get("FUZZBENCH_CPU_OFFSET", "0"))
+    runner_num_cpu_cores = int(os.environ.get("FUZZBENCH_RUNNER_NUM_CPU_CORES", "1"))
+    measurers_cpus = int(os.environ.get("FUZZBENCH_MEASURERS_CPUS", "0")) or None
+    runners_cpus = int(os.environ.get("FUZZBENCH_RUNNERS_CPUS", "0")) or None
 
     try:
-        measure_loop(experiment_name, int(sys.argv[1]))
+        # measure_loop(experiment_name, int(sys.argv[1]))
+        measure_loop(experiment_name, int(sys.argv[1]),
+             measurers_cpus=measurers_cpus,
+             runners_cpus=runners_cpus,
+             cpu_offset=cpu_offset,
+             runner_num_cpu_cores=runner_num_cpu_cores)
     except Exception as error:
         logs.error('Error conducting experiment.')
         raise error
